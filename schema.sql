@@ -1,4 +1,6 @@
+
 USE HRMS;
+GO
 /* Corrected HRMS schema
    - No GO separators
    - Proper ordering to avoid FK errors

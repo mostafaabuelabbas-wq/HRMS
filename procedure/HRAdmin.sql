@@ -1,4 +1,5 @@
 USE HRMS
+GO
 --HR admin
 --1  CreateContract
 CREATE PROCEDURE CreateContract

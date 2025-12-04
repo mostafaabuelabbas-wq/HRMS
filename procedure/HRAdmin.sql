@@ -10,50 +10,76 @@ CREATE PROCEDURE CreateContract
 AS
 BEGIN
     SET NOCOUNT ON;
+    BEGIN TRY
+        BEGIN TRANSACTION;
 
-    -- 1. Insert the new contract
-    INSERT INTO Contract (type, start_date, end_date, current_state)
-    VALUES (@Type, @StartDate, @EndDate, 'Active');
+        -- 1. Validate employee exists
+        IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @EmployeeID)
+        BEGIN
+            RAISERROR('Employee does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
 
-    -- 2. Capture the new contract ID
-    DECLARE @NewContractID INT = SCOPE_IDENTITY();
+        -- 2. Validate dates
+        IF (@StartDate >= @EndDate)
+        BEGIN
+            RAISERROR('StartDate must be earlier than EndDate.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
 
-    -- 3. Update Employee to link the new contract
-    UPDATE Employee
-    SET contract_id = @NewContractID
-    WHERE employee_id = @EmployeeID;
+        -- 3. Insert Contract
+        INSERT INTO Contract (type, start_date, end_date, current_state)
+        VALUES (@Type, @StartDate, @EndDate, 'Active');
 
-    -- 4. Return confirmation
-    SELECT
-        'Contract created successfully for employee '
-        + CAST(@EmployeeID AS VARCHAR(10))
-        + ', ContractID = ' + CAST(@NewContractID AS VARCHAR(10))
-        AS ConfirmationMessage;
+        DECLARE @NewContractID INT = SCOPE_IDENTITY();
+
+        -- 4. Insert into contract subtype
+        IF (@Type = 'FullTime')
+            INSERT INTO FullTimeContract (contract_id, leave_entitlement, insurance_eligibility, weekly_working_hours)
+            VALUES (@NewContractID, 21, 1, 40);
+
+        ELSE IF (@Type = 'PartTime')
+            INSERT INTO PartTimeContract (contract_id, working_hours, hourly_rate)
+            VALUES (@NewContractID, 20, 150);
+
+        ELSE IF (@Type = 'Consultant')
+            INSERT INTO ConsultantContract (contract_id, project_scope, fees, payment_schedule)
+            VALUES (@NewContractID, 'General Project', 0, 'Monthly');
+
+        ELSE IF (@Type = 'Internship')
+            INSERT INTO InternshipContract (contract_id, mentoring, evaluation, stipend_related)
+            VALUES (@NewContractID, 'Mentoring Program', 'Evaluation', 'Stipend');
+
+        ELSE
+        BEGIN
+            RAISERROR('Invalid contract type.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        -- 5. Assign contract to employee
+        UPDATE Employee
+        SET contract_id = @NewContractID
+        WHERE employee_id = @EmployeeID;
+
+        COMMIT TRANSACTION;
+
+        SELECT 'Contract created successfully. ContractID = ' 
+               + CAST(@NewContractID AS VARCHAR(10))
+               AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
 END;
 GO
 
 
-/*
--- BEFORE EXECUTION
-SELECT employee_id, contract_id 
-FROM Employee 
-WHERE employee_id = 2;
 
-SELECT * 
-FROM Contract
-ORDER BY contract_id DESC;
-
-EXEC CreateContract 
-    @EmployeeID = 2,
-    @Type = 'FullTime',
-    @StartDate = '2025-01-01',
-    @EndDate = '2026-01-01';
-
--- AFTER EXECUTION
-SELECT employee_id, contract_id 
-FROM Employee 
-WHERE employee_id = 2;
-*/
 
 
 -- 2 RenewContract
@@ -62,6 +88,28 @@ CREATE PROCEDURE RenewContract
     @NewEndDate DATE
 AS
 BEGIN
+    SET NOCOUNT ON;
+
+    -- 1. Check if contract exists and retrieve start date
+    DECLARE @StartDate DATE;
+    SELECT @StartDate = start_date 
+    FROM Contract 
+    WHERE contract_id = @ContractID;
+
+    IF @StartDate IS NULL
+    BEGIN
+        SELECT 'Error: Contract not found' AS ConfirmationMessage;
+        RETURN;
+    END
+
+    -- 2. Validate end date
+    IF @NewEndDate <= @StartDate
+    BEGIN
+        SELECT 'Error: New end date must be after start date' AS ConfirmationMessage;
+        RETURN;
+    END
+
+    -- 3. Update
     UPDATE Contract
     SET end_date = @NewEndDate,
         current_state = 'Active'
@@ -70,23 +118,9 @@ BEGIN
     SELECT 'Contract renewed successfully' AS ConfirmationMessage;
 END;
 GO
-/*
--- BEFORE
-SELECT contract_id, type, start_date, end_date, current_state
-FROM Contract
-WHERE contract_id = 7;    -- use the contract ID you are renewing
 
-EXEC RenewContract 
-    @ContractID = 7,
-    @NewEndDate = '2027-01-01';
 
--- AFTER
-SELECT contract_id, type, start_date, end_date, current_state
-FROM Contract
-WHERE contract_id = 7;
-*/
-
--- 3. ApproveLeaveRequest
+-- 3  ApproveLeaveRequest
 CREATE PROCEDURE ApproveLeaveRequest
     @LeaveRequestID INT,
     @ApproverID INT,
@@ -95,85 +129,83 @@ AS
 BEGIN
     SET NOCOUNT ON;
 
-    DECLARE @LeaveID INT;
-    DECLARE @LeaveType VARCHAR(50);
-    DECLARE @EmployeeID INT;
+    BEGIN TRY
+        BEGIN TRANSACTION;
 
-    -- Get request details
-    SELECT 
-        @LeaveID = leave_id,
-        @EmployeeID = employee_id
-    FROM LeaveRequest
-    WHERE request_id = @LeaveRequestID;
+        DECLARE @LeaveID INT;
+        DECLARE @EmployeeID INT;
+        DECLARE @LeaveType VARCHAR(50);
 
-    -- Get the leave type
-    SELECT @LeaveType = leave_type
-    FROM Leave
-    WHERE leave_id = @LeaveID;
+        -- Validate request exists
+        IF NOT EXISTS (SELECT 1 FROM LeaveRequest WHERE request_id = @LeaveRequestID)
+        BEGIN
+            RAISERROR('Leave request does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
 
-    -- 1. Update LeaveRequest
-    UPDATE LeaveRequest
-    SET status = @Status,
-        approval_timing = GETDATE()
-    WHERE request_id = @LeaveRequestID;
+        -- Validate approver exists
+        IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @ApproverID)
+        BEGIN
+            RAISERROR('Approver does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
 
-    -- 2. Update VacationLeave ONLY IF leave is Vacation
-    IF @LeaveType = 'Vacation'
-    BEGIN
-        UPDATE VacationLeave
-        SET approving_manager = @ApproverID
+        -- Fetch request data
+        SELECT 
+            @LeaveID = leave_id,
+            @EmployeeID = employee_id
+        FROM LeaveRequest
+        WHERE request_id = @LeaveRequestID;
+
+        -- Get leave type
+        SELECT @LeaveType = leave_type
+        FROM [Leave]
         WHERE leave_id = @LeaveID;
-    END
 
-    -- 3. Create Notification
-    INSERT INTO Notification (message_content, timestamp, urgency, read_status, notification_type)
-    VALUES (
-        'Your leave request has been ' + @Status,
-        GETDATE(),
-        'Medium',
-        0,
-        'Leave'
-    );
+        -- Update request status
+        UPDATE LeaveRequest
+        SET status = @Status,
+            approval_timing = GETDATE()
+        WHERE request_id = @LeaveRequestID;
 
-    DECLARE @NotificationID INT = SCOPE_IDENTITY();
+        -- Update subtype table IF Vacation leave
+        IF @LeaveType = 'Vacation'
+        BEGIN
+            UPDATE VacationLeave
+            SET approving_manager = @ApproverID
+            WHERE leave_id = @LeaveID;
+        END
 
-    -- 4. Assign notification to employee
-    INSERT INTO Employee_Notification (employee_id, notification_id, delivery_status, delivered_at)
-    VALUES (@EmployeeID, @NotificationID, 'Sent', GETDATE());
+        -- Create notification
+        INSERT INTO Notification (message_content, urgency, read_status, notification_type)
+        VALUES (
+            'Your leave request has been ' + @Status,
+            'Medium',
+            0,
+            'Leave'
+        );
 
-    -- 5. Confirmation message
-    SELECT 'Leave request ' + @Status + ' successfully' AS ConfirmationMessage;
+        DECLARE @NotificationID INT = SCOPE_IDENTITY();
+
+        -- Assign notification to employee
+        INSERT INTO Employee_Notification (employee_id, notification_id, delivery_status, delivered_at)
+        VALUES (@EmployeeID, @NotificationID, 'Sent', GETDATE());
+
+        COMMIT TRANSACTION;
+
+        SELECT 'Leave request ' + @Status + ' successfully' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
 END;
 GO
-/*
--- BEFORE
-SELECT request_id, leave_id, employee_id, status, approval_timing
-FROM LeaveRequest
-WHERE request_id = 2;
 
-SELECT *
-FROM Employee_Notification
-WHERE employee_id = 2;   -- Sara
 
-SELECT *
-FROM Notification
-ORDER BY notification_id DESC;
-EXEC ApproveLeaveRequest 
-    @LeaveRequestID = 2,
-    @ApproverID = 1,
-    @Status = 'Approved';
-
-SELECT request_id, leave_id, employee_id, status, approval_timing
-FROM LeaveRequest
-WHERE request_id = 2;
-
-SELECT *
-FROM Notification
-ORDER BY notification_id DESC;
-SELECT *
-FROM Employee_Notification
-WHERE employee_id = 2;
-*/
 
 -- 4. AssignMission
 CREATE PROCEDURE AssignMission

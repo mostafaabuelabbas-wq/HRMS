@@ -46,6 +46,13 @@ AS
 BEGIN
     DECLARE @EmployeeID INT;
 
+    -- Validate payroll record exists
+    IF NOT EXISTS (SELECT 1 FROM Payroll WHERE payroll_id = @PayrollID)
+    BEGIN
+        SELECT 'Error: Payroll record not found' AS ConfirmationMessage;
+        RETURN;
+    END;
+
     -- Get employee assigned to this payroll record
     SELECT @EmployeeID = employee_id
     FROM Payroll
@@ -315,6 +322,12 @@ CREATE PROCEDURE ValidateAttendanceBeforePayroll
     @PayrollPeriodID INT
 AS
 BEGIN
+    IF NOT EXISTS (SELECT 1 FROM PayrollPeriod WHERE payroll_period_id = @PayrollPeriodID)
+    BEGIN
+        SELECT 'Error: Payroll period not found' AS Message;
+        RETURN;
+    END;
+
     SELECT 
         e.employee_id,
         e.full_name,
@@ -336,16 +349,19 @@ CREATE PROCEDURE SyncAttendanceToPayroll
     @SyncDate DATE
 AS
 BEGIN
-    INSERT INTO AllowanceDeduction (employee_id, type, amount, duration, currency_code)
+    INSERT INTO AllowanceDeduction (payroll_id, employee_id, type, amount, duration, currency_code)
     SELECT 
+        p.payroll_id,
         a.employee_id,
         'Attendance Adjustment',
         0.00,
         CAST(a.duration AS VARCHAR(50)),
         'USD'
     FROM Attendance a
+    INNER JOIN Payroll p ON a.employee_id = p.employee_id
     WHERE CAST(a.entry_time AS DATE) = @SyncDate
-        AND a.exit_time IS NOT NULL;
+        AND a.exit_time IS NOT NULL
+        AND CAST(a.entry_time AS DATE) BETWEEN p.period_start AND p.period_end;
 
     SELECT 'Attendance synced to payroll successfully' AS ConfirmationMessage;
 END;
@@ -614,10 +630,14 @@ CREATE PROCEDURE DefinePayType
     @EffectiveDate DATE
 AS
 BEGIN
+    DECLARE @SalaryTypeID INT;
+
     IF EXISTS (SELECT 1 FROM SalaryType WHERE type = @PayType)
     BEGIN
+        SELECT @SalaryTypeID = salary_type_id FROM SalaryType WHERE type = @PayType;
+        
         UPDATE Employee
-        SET salary_type_id = (SELECT salary_type_id FROM SalaryType WHERE type = @PayType)
+        SET salary_type_id = @SalaryTypeID
         WHERE employee_id = @EmployeeID;
 
         SELECT 'Pay type defined successfully for employee ' + CAST(@EmployeeID AS VARCHAR(10)) AS ConfirmationMessage;
@@ -627,8 +647,10 @@ BEGIN
         INSERT INTO SalaryType (type, payment_frequency, currency_code)
         VALUES (@PayType, 'Standard', 'USD');
 
+        SET @SalaryTypeID = SCOPE_IDENTITY();
+        
         UPDATE Employee
-        SET salary_type_id = SCOPE_IDENTITY()
+        SET salary_type_id = @SalaryTypeID
         WHERE employee_id = @EmployeeID;
 
         SELECT 'New pay type created and assigned to employee ' + CAST(@EmployeeID AS VARCHAR(10)) AS ConfirmationMessage;
@@ -643,15 +665,19 @@ CREATE PROCEDURE ConfigureOvertimeRules
     @HoursPerMonth INT
 AS
 BEGIN
+    DECLARE @PolicyID INT;
+
     INSERT INTO PayrollPolicy (effective_date, [type], [description])
     VALUES (GETDATE(), 'Overtime', 'DayType: ' + @DayType + ' | Multiplier: ' + CAST(@Multiplier AS VARCHAR(10)));
 
+    SET @PolicyID = SCOPE_IDENTITY();
+
     INSERT INTO OvertimePolicy (policy_id, weekday_rate_multiplier, weekend_rate_multiplier, max_hours_per_month)
-    SELECT 
-        SCOPE_IDENTITY(),
+    VALUES (
+        @PolicyID,
         CASE WHEN @DayType = 'Weekday' THEN @Multiplier ELSE 1.0 END,
         CASE WHEN @DayType = 'Weekend' THEN @Multiplier ELSE 1.5 END,
-        @HoursPerMonth;
+        @HoursPerMonth);
 
     SELECT 'Overtime rule configured successfully for ' + @DayType AS ConfirmationMessage;
 END;
@@ -685,14 +711,15 @@ CREATE PROCEDURE ConfigureSigningBonusPolicy
     @EligibilityCriteria NVARCHAR(MAX)
 AS
 BEGIN
+    DECLARE @PolicyID INT;
+
     INSERT INTO PayrollPolicy (effective_date, [type], [description])
     VALUES (GETDATE(), 'Signing Bonus', @BonusType + ': ' + CAST(@Amount AS VARCHAR(20)));
 
+    SET @PolicyID = SCOPE_IDENTITY();
+
     INSERT INTO BonusPolicy (policy_id, bonus_type, eligibility_criteria)
-    SELECT 
-        SCOPE_IDENTITY(),
-        @BonusType,
-        @EligibilityCriteria;
+    VALUES (@PolicyID, @BonusType, @EligibilityCriteria);
 
     SELECT 'Signing bonus policy configured successfully for ' + @BonusType AS ConfirmationMessage;
 END;
@@ -757,23 +784,41 @@ CREATE PROCEDURE ModifyPastPayroll
     @ModifiedBy INT
 AS
 BEGIN
+    IF NOT EXISTS (SELECT 1 FROM Payroll WHERE payroll_id = @PayrollRunID AND employee_id = @EmployeeID)
+    BEGIN
+        SELECT 'Error: Payroll record not found' AS ConfirmationMessage;
+        RETURN;
+    END;
+
     IF @FieldName = 'base_amount'
+    BEGIN
         UPDATE Payroll SET base_amount = @NewValue WHERE payroll_id = @PayrollRunID AND employee_id = @EmployeeID;
+    END
     ELSE IF @FieldName = 'adjustments'
+    BEGIN
         UPDATE Payroll SET adjustments = @NewValue WHERE payroll_id = @PayrollRunID AND employee_id = @EmployeeID;
+    END
     ELSE IF @FieldName = 'taxes'
+    BEGIN
         UPDATE Payroll SET taxes = @NewValue WHERE payroll_id = @PayrollRunID AND employee_id = @EmployeeID;
+    END
     ELSE IF @FieldName = 'contributions'
+    BEGIN
         UPDATE Payroll SET contributions = @NewValue WHERE payroll_id = @PayrollRunID AND employee_id = @EmployeeID;
+    END
     ELSE IF @FieldName = 'actual_pay'
+    BEGIN
         UPDATE Payroll SET actual_pay = @NewValue WHERE payroll_id = @PayrollRunID AND employee_id = @EmployeeID;
+    END
     ELSE IF @FieldName = 'net_salary'
+    BEGIN
         UPDATE Payroll SET net_salary = @NewValue WHERE payroll_id = @PayrollRunID AND employee_id = @EmployeeID;
+    END
     ELSE
     BEGIN
         SELECT 'Error: Invalid field name' AS ConfirmationMessage;
         RETURN;
-    END
+    END;
 
     INSERT INTO Payroll_Log (payroll_id, actor, modification_type)
     VALUES (@PayrollRunID, @ModifiedBy, 'Modified ' + @FieldName + ' to ' + CAST(@NewValue AS VARCHAR(20)));

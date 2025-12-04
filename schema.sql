@@ -1,4 +1,6 @@
-
+SET ANSI_NULLS ON;
+SET QUOTED_IDENTIFIER ON;
+GO
 USE HRMS;
 GO
 /* Corrected HRMS schema

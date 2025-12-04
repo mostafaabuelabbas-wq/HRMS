@@ -207,7 +207,8 @@ GO
 
 
 
--- 4. AssignMission
+-- 4 AssignMission
+-- PROCEDURE: AssignMission
 CREATE PROCEDURE AssignMission
     @EmployeeID INT,
     @ManagerID INT,
@@ -216,25 +217,71 @@ CREATE PROCEDURE AssignMission
     @EndDate DATE
 AS
 BEGIN
-    INSERT INTO Mission (destination, start_date, end_date, status, employee_id, manager_id)
-    VALUES (@Destination, @StartDate, @EndDate, 'Assigned', @EmployeeID, @ManagerID);
+    SET NOCOUNT ON;
 
-    INSERT INTO Notification (message_content, urgency, notification_type)
-    VALUES (
-        'You have been assigned a mission to ' + @Destination + ' from ' + CONVERT(VARCHAR(10), @StartDate, 120) + ' to ' + CONVERT(VARCHAR(10), @EndDate, 120),
-        'High',
-        'Mission Assignment'
-    );
+    BEGIN TRY
+        BEGIN TRANSACTION;
 
-    INSERT INTO Employee_Notification (employee_id, notification_id, delivery_status, delivered_at)
-    VALUES (@EmployeeID, SCOPE_IDENTITY(), 'Sent', GETDATE());
+        -- Validate employee exists
+        IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @EmployeeID)
+        BEGIN
+            RAISERROR('Employee does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
 
-    SELECT 'Mission assigned successfully to employee ' + CAST(@EmployeeID AS VARCHAR(10)) AS ConfirmationMessage;
+        -- Validate manager exists
+        IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @ManagerID)
+        BEGIN
+            RAISERROR('Manager does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        -- Validate date range
+        IF (@StartDate >= @EndDate)
+        BEGIN
+            RAISERROR('StartDate must be earlier than EndDate.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        -- Insert mission
+        INSERT INTO Mission (destination, start_date, end_date, status, employee_id, manager_id)
+        VALUES (@Destination, @StartDate, @EndDate, 'Assigned', @EmployeeID, @ManagerID);
+
+        -- Create notification
+        INSERT INTO Notification (message_content, urgency, read_status, notification_type)
+        VALUES (
+            'You have been assigned a mission to ' + @Destination +
+            ' from ' + CONVERT(VARCHAR(10), @StartDate, 120) +
+            ' to ' + CONVERT(VARCHAR(10), @EndDate, 120),
+            'High',
+            0,
+            'Mission Assignment'
+        );
+
+        DECLARE @NotificationID INT = SCOPE_IDENTITY();
+
+        -- Assign notification to employee
+        INSERT INTO Employee_Notification (employee_id, notification_id, delivery_status, delivered_at)
+        VALUES (@EmployeeID, @NotificationID, 'Sent', GETDATE());
+
+        COMMIT TRANSACTION;
+
+        SELECT 'Mission assigned successfully to employee ' + CAST(@EmployeeID AS VARCHAR(10)) AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
 END;
 GO
 
 
--- 5. ReviewReimbursement
+
+-- 5 ReviewReimbursement
 CREATE PROCEDURE ReviewReimbursement
     @ClaimID INT,
     @ApproverID INT,
@@ -243,81 +290,79 @@ AS
 BEGIN
     SET NOCOUNT ON;
 
-    DECLARE @EmployeeID INT;
-    DECLARE @Type VARCHAR(50);
+    BEGIN TRY
+        BEGIN TRANSACTION;
 
-    -- Get data for notification
-    SELECT 
-        @EmployeeID = employee_id,
-        @Type = type
-    FROM Reimbursement
-    WHERE reimbursement_id = @ClaimID;
+        DECLARE @EmployeeID INT;
+        DECLARE @Type VARCHAR(50);
 
-    -- 1. Update reimbursement status
-    UPDATE Reimbursement
-    SET current_status = @Decision,
-        approval_date = GETDATE()
-    WHERE reimbursement_id = @ClaimID;
+        -- Validate reimbursement exists
+        IF NOT EXISTS (SELECT 1 FROM Reimbursement WHERE reimbursement_id = @ClaimID)
+        BEGIN
+            RAISERROR('Reimbursement claim does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
 
-    -- 2. Add notification (correct schema)
-    INSERT INTO Notification (message_content, timestamp, urgency, read_status, notification_type)
-    VALUES (
-        'Your reimbursement claim for ' + @Type + ' has been ' + @Decision,
-        GETDATE(),
-        'Medium',
-        0,
-        'Reimbursement'
-    );
+        -- Validate approver exists
+        IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @ApproverID)
+        BEGIN
+            RAISERROR('Approver does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
 
-    DECLARE @NotificationID INT = SCOPE_IDENTITY();
+        -- Get employee and claim type
+        SELECT 
+            @EmployeeID = employee_id,
+            @Type = type
+        FROM Reimbursement
+        WHERE reimbursement_id = @ClaimID;
 
-    -- 3. Link notification to employee
-    INSERT INTO Employee_Notification (employee_id, notification_id, delivery_status, delivered_at)
-    VALUES (@EmployeeID, @NotificationID, 'Sent', GETDATE());
+        -- Update reimbursement
+        UPDATE Reimbursement
+        SET current_status = @Decision,
+            approval_date = GETDATE()
+        WHERE reimbursement_id = @ClaimID;
 
-    -- 4. Confirmation message
-    SELECT 'Reimbursement claim ' + @Decision + ' successfully' AS ConfirmationMessage;
+        -- Create notification
+        INSERT INTO Notification (message_content, urgency, read_status, notification_type)
+        VALUES (
+            'Your reimbursement claim for ' + @Type + ' has been ' + @Decision,
+            'Medium',
+            0,
+            'Reimbursement'
+        );
+
+        DECLARE @NotificationID INT = SCOPE_IDENTITY();
+
+        -- Assign notification to employee
+        INSERT INTO Employee_Notification (employee_id, notification_id, delivery_status, delivered_at)
+        VALUES (@EmployeeID, @NotificationID, 'Sent', GETDATE());
+
+        COMMIT TRANSACTION;
+
+        SELECT 'Reimbursement claim ' + @Decision + ' successfully' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
 END;
 GO
-/*
--- 1. Check Reimbursement table BEFORE
-SELECT reimbursement_id, employee_id, type, claim_type, current_status, approval_date
-FROM Reimbursement;
-
--- 2. Check Notification table BEFORE
-SELECT *
-FROM Notification
-ORDER BY notification_id DESC;
-
--- 3. Check Employee_Notification BEFORE (for all employees)
-SELECT *
-FROM Employee_Notification;
 
 
-EXEC ReviewReimbursement
-    @ClaimID = 2,     -- <--- use the REAL ID you saw in BEFORE step
-    @ApproverID = 1,
-    @Decision = 'Approved';
-
--- 1. Check Reimbursement table AFTER
-SELECT reimbursement_id, employee_id, type, claim_type, current_status, approval_date
-FROM Reimbursement;
-
--- 2. Check Notification table AFTER
-SELECT *
-FROM Notification
-ORDER BY notification_id DESC;
-
--- 3. Check Employee_Notification AFTER
-SELECT *
-FROM Employee_Notification;
-*/
 
 
--- 6. GetActiveContracts
+-- 6 GetActiveContracts
+-- PROCEDURE: GetActiveContracts
 CREATE PROCEDURE GetActiveContracts
 AS
 BEGIN
+    SET NOCOUNT ON;
+
+    -- return all active contracts with employee & department data
     SELECT 
         c.contract_id,
         c.type,
@@ -334,16 +379,19 @@ BEGIN
     WHERE c.current_state = 'Active';
 END;
 GO
--- 7. GetTeamByManager
+
+-- 7 GetTeamByManager
+-- PROCEDURE: GetTeamByManager
 CREATE PROCEDURE GetTeamByManager
     @ManagerID INT
 AS
 BEGIN
     SET NOCOUNT ON;
 
+    -- Return all active employees reporting to a specific manager
     SELECT 
         e.employee_id,
-        (e.first_name + ' ' + e.last_name) AS full_name,
+        e.full_name,  -- use computed column instead of manual concat
         e.position_id,
         p.position_title,
         e.department_id,
@@ -352,35 +400,63 @@ BEGIN
     FROM Employee e
     LEFT JOIN Position p ON e.position_id = p.position_id
     LEFT JOIN Department d ON e.department_id = d.department_id
-    WHERE e.manager_id = @ManagerID
+    WHERE e.manager_id = @ManagerID 
       AND e.is_active = 1
-    ORDER BY full_name;
+    ORDER BY e.full_name;
 END;
 GO
-/*
-SELECT employee_id, first_name, last_name, manager_id, is_active
-FROM Employee
-ORDER BY employee_id;
-*/
--- 8. UpdateLeavePolicy
+
+
+-- 8 UpdateLeavePolicy
+-- PROCEDURE: UpdateLeavePolicy
 CREATE PROCEDURE UpdateLeavePolicy
     @PolicyID INT,
     @EligibilityRules VARCHAR(200),
     @NoticePeriod INT
 AS
-UPDATE LeavePolicy
-SET eligibility_rules = @EligibilityRules,
-    notice_period = @NoticePeriod
-WHERE policy_id = @PolicyID;
+BEGIN
+    SET NOCOUNT ON;
 
- SELECT 'Leave policy updated successfully' AS ConfirmationMessage;
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        -- Validate policy exists
+        IF NOT EXISTS (SELECT 1 FROM LeavePolicy WHERE policy_id = @PolicyID)
+        BEGIN
+            RAISERROR('Leave policy does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        -- Update the policy
+        UPDATE LeavePolicy
+        SET eligibility_rules = @EligibilityRules,
+            notice_period = @NoticePeriod
+        WHERE policy_id = @PolicyID;
+
+        COMMIT TRANSACTION;
+
+        SELECT 'Leave policy updated successfully' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
+
+END;
 GO
 
--- 9. GetExpiringContracts
+
+-- 9 GetExpiringContracts
+-- PROCEDURE: GetExpiringContracts
 CREATE PROCEDURE GetExpiringContracts
     @DaysBefore INT
 AS
 BEGIN
+    SET NOCOUNT ON;
+
+    -- Return contracts that will expire within the next @DaysBefore days
     SELECT 
         c.contract_id,
         c.type,
@@ -393,21 +469,58 @@ BEGIN
     FROM Contract c
     INNER JOIN Employee e ON c.contract_id = e.contract_id
     LEFT JOIN Department d ON e.department_id = d.department_id
-    WHERE c.end_date BETWEEN GETDATE() AND DATEADD(DAY, @DaysBefore, GETDATE())
+    WHERE c.end_date > GETDATE()            -- must be in the future
+      AND c.end_date <= DATEADD(DAY, @DaysBefore, GETDATE())
     ORDER BY c.end_date;
 END;
 GO
--- 10. AssignDepartmentHead
+
+-- 10 AssignDepartmentHead
+-- PROCEDURE: AssignDepartmentHead
 CREATE PROCEDURE AssignDepartmentHead
     @DepartmentID INT,
     @ManagerID INT
 AS
-UPDATE Department
-SET department_head_id = @ManagerID
-WHERE department_id = @DepartmentID;
+BEGIN
+    SET NOCOUNT ON;
 
- SELECT 'Department head assigned successfully' AS ConfirmationMessage;
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        -- Validate department exists
+        IF NOT EXISTS (SELECT 1 FROM Department WHERE department_id = @DepartmentID)
+        BEGIN
+            RAISERROR('Department does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        -- Validate manager exists
+        IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @ManagerID)
+        BEGIN
+            RAISERROR('Manager (employee) does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        -- Update department head
+        UPDATE Department
+        SET department_head_id = @ManagerID
+        WHERE department_id = @DepartmentID;
+
+        COMMIT TRANSACTION;
+
+        SELECT 'Department head assigned successfully' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
+
+END;
 GO
+
 
 -- 11. CreateEmployeeProfile
 CREATE PROCEDURE CreateEmployeeProfile

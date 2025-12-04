@@ -79,3 +79,142 @@ SELECT *
 FROM Employee_Notification
 WHERE employee_id = 2;
 */
+
+
+-- 4 AssignMission
+/*
+-- Check missions before
+SELECT * FROM Mission ORDER BY mission_id;
+
+-- Check notifications before
+SELECT * FROM Notification ORDER BY notification_id;
+
+-- Check employee notifications before
+SELECT * FROM Employee_Notification WHERE employee_id = 2;   -- Example employee
+
+EXEC AssignMission
+    @EmployeeID = 2,
+    @ManagerID = 1,
+    @Destination = 'Dubai',
+    @StartDate = '2025-01-10',
+    @EndDate = '2025-01-15';
+
+
+-- New mission should appear
+SELECT TOP 1 * FROM Mission ORDER BY mission_id DESC;
+
+-- New notification created
+SELECT TOP 1 * FROM Notification ORDER BY notification_id DESC;
+
+-- Notification assigned to employee
+SELECT TOP 1 * 
+FROM Employee_Notification 
+WHERE employee_id = 2
+ORDER BY delivered_at DESC;
+*/
+
+-- 5 ReviewReimbursement
+/*
+--before
+SELECT reimbursement_id, employee_id, type, current_status, approval_date
+FROM Reimbursement
+WHERE reimbursement_id = 1;
+
+SELECT * FROM Employee_Notification WHERE employee_id = 1;
+
+SELECT TOP 1 * FROM Notification ORDER BY notification_id DESC;
+
+EXEC ReviewReimbursement
+    @ClaimID = 1,
+    @ApproverID = 3,
+    @Decision = 'Approved';
+
+ -- Reimbursement must now be updated
+SELECT reimbursement_id, employee_id, type, current_status, approval_date
+FROM Reimbursement
+WHERE reimbursement_id = 1;
+
+-- Check the new notification
+SELECT TOP 1 * FROM Notification ORDER BY notification_id DESC;
+
+-- Confirm employee received the notification
+SELECT TOP 1 *
+FROM Employee_Notification
+WHERE employee_id = 1
+ORDER BY delivered_at DESC;
+*/
+
+
+-- 6 GetActiveContracts
+/*
+SELECT * FROM Contract;
+
+SELECT employee_id, full_name, contract_id 
+FROM Employee;
+
+SELECT department_id, department_name 
+FROM Department;
+
+EXEC GetActiveContracts;
+*/
+
+-- 7 GetTeamByManager
+/*
+SELECT employee_id, full_name, manager_id, is_active
+FROM Employee
+ORDER BY employee_id;
+SELECT * FROM Position;
+SELECT * FROM Department;
+
+EXEC GetTeamByManager @ManagerID = 1;
+*/
+/*
+-- 8 UpdateLeavePolicy
+--before
+SELECT policy_id, name, eligibility_rules, notice_period
+FROM LeavePolicy
+WHERE policy_id = 1;
+
+EXEC UpdateLeavePolicy
+    @PolicyID = 1,
+    @EligibilityRules = 'Minimum 2 years experience',
+    @NoticePeriod = 30;
+
+-- Check updated policy
+SELECT policy_id, name, eligibility_rules, notice_period
+FROM LeavePolicy
+WHERE policy_id = 1;
+*/
+
+/*
+-- 9 GetExpiringContracts
+SELECT contract_id, type, end_date 
+FROM Contract;
+
+SELECT employee_id, full_name, contract_id 
+FROM Employee;
+
+SELECT department_id, department_name 
+FROM Department;
+
+EXEC GetExpiringContracts @DaysBefore = 400;
+*/
+
+/*
+-- 10 AssignDepartmentHead
+SELECT department_id, department_name, department_head_id
+FROM Department
+ORDER BY department_id;
+
+SELECT employee_id, full_name
+FROM Employee
+ORDER BY employee_id;
+
+EXEC AssignDepartmentHead 
+    @DepartmentID = 2,
+    @ManagerID = 1;
+-- Check updated department head
+SELECT department_id, department_name, department_head_id
+FROM Department
+WHERE department_id = 2;
+*/

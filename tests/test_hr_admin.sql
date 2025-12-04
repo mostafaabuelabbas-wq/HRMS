@@ -218,3 +218,168 @@ SELECT department_id, department_name, department_head_id
 FROM Department
 WHERE department_id = 2;
 */
+
+-- 11 CreateEmployeeProfile
+/*
+SELECT employee_id, full_name, email, department_id, position_id
+FROM Employee
+ORDER BY employee_id;
+
+SELECT * FROM Position;
+SELECT * FROM Department;
+
+EXEC CreateEmployeeProfile
+    @FirstName = 'John',
+    @LastName = 'Doe',
+    @DepartmentID = 2,
+    @RoleID = 2,
+    @HireDate = '2025-02-01',
+    @Email = 'john.doe@example.com',
+    @Phone = '0105555555',
+    @NationalID = '29901011234567',
+    @DateOfBirth = '1999-01-01',
+    @CountryOfBirth = 'Egypt';
+
+
+SELECT employee_id, first_name, last_name, country_of_birth, email, department_id, position_id
+FROM Employee
+WHERE email = 'john.doe@example.com';
+*/
+/*
+-- 12 UpdateEmployeeProfile
+SELECT employee_id, full_name, phone, email, address, employment_status
+FROM Employee
+WHERE employee_id = 2;
+
+EXEC UpdateEmployeeProfile
+    @EmployeeID = 2,
+    @FieldName = 'phone',
+    @NewValue = '01555555555';
+
+SELECT employee_id, full_name, phone
+FROM Employee
+WHERE employee_id = 2;
+*/
+
+-- 13 SetProfileCompleteness
+/*
+SELECT employee_id, full_name, profile_completion
+FROM Employee
+WHERE employee_id = 1;
+
+EXEC SetProfileCompleteness
+    @EmployeeID = 1,
+    @CompletenessPercentage = 100;
+
+SELECT employee_id, full_name, profile_completion
+FROM Employee
+WHERE employee_id = 1;
+*/
+
+-- 14 GenerateProfileReport
+/*
+SELECT employee_id, full_name, department_id, employment_status, country_of_birth
+FROM Employee;
+
+SELECT department_id, department_name FROM Department;
+
+EXEC GenerateProfileReport 
+    @FilterField = 'department',
+    @FilterValue = 'IT';
+
+EXEC GenerateProfileReport 
+    @FilterField = 'employment_status',
+    @FilterValue = 'Full-time';
+
+EXEC GenerateProfileReport 
+    @FilterField = 'country_of_birth',
+    @FilterValue = 'Egypt';
+
+EXEC GenerateProfileReport 
+    @FilterField = 'country_of_birth',
+    @FilterValue = 'Egypt';
+*/
+
+
+-- 15 CreateShiftType
+/*
+SELECT shift_id, name, type, start_time, end_time, status
+FROM ShiftSchedule;
+
+EXEC CreateShiftType
+     @ShiftID = NULL,
+     @Name = 'Mission Shift',
+     @Type = 'Mission',
+     @Start_Time = '08:00',
+     @End_Time = '18:00',
+     @Break_Duration = 60,
+     @Shift_Date = '2025-01-10',
+     @Status = 'Active';
+
+SELECT * FROM ShiftSchedule WHERE shift_id = 4;
+*/
+
+
+-- 17 AssignRotationalShift
+/*
+SELECT * FROM ShiftCycle;
+SELECT * FROM ShiftCycleAssignment WHERE cycle_id = 1;
+
+SELECT employee_id, full_name FROM Employee;
+
+SELECT * FROM ShiftAssignment WHERE employee_id = 2;
+
+EXEC AssignRotationalShift
+    @EmployeeID = 2,
+    @ShiftCycle = 1,
+    @StartDate = '2025-01-01',
+    @EndDate = '2025-12-31',
+    @Status = 'Active';
+
+SELECT *
+FROM ShiftAssignment
+WHERE employee_id = 2
+ORDER BY assignment_id DESC;
+*/
+
+-- 18 NotifyShiftExpiry
+/*
+-- (Before)
+SELECT * FROM Notification;
+SELECT * FROM Employee_Notification WHERE employee_id = 2;
+
+SELECT assignment_id, employee_id, end_date
+FROM ShiftAssignment
+WHERE assignment_id = 2;
+
+EXEC NotifyShiftExpiry
+    @EmployeeID = 2,
+    @ShiftAssignmentID = 2,
+    @ExpiryDate = '2024-06-30';
+
+SELECT * FROM Notification ORDER BY notification_id DESC;
+
+SELECT * FROM Employee_Notification 
+WHERE employee_id = 2
+ORDER BY delivered_at DESC;
+*/
+
+-- 19 DefineShortTimeRules
+/*
+SELECT policy_id, type, description
+FROM PayrollPolicy
+ORDER BY policy_id;
+
+EXEC DefineShortTimeRules
+    @RuleName = 'Minor Lateness Rule',
+    @LateMinutes = 10,
+    @EarlyLeaveMinutes = 5,
+    @PenaltyType = 'Deduction';
+
+
+SELECT policy_id, type, description
+FROM PayrollPolicy
+WHERE type = 'Short Time'
+ORDER BY policy_id DESC;
+*/
+

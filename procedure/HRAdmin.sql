@@ -522,110 +522,286 @@ END;
 GO
 
 
--- 11. CreateEmployeeProfile
+-- 11 CreateEmployeeProfile
+-- PROCEDURE: CreateEmployeeProfile
 CREATE PROCEDURE CreateEmployeeProfile
     @FirstName VARCHAR(50),
     @LastName VARCHAR(50),
     @DepartmentID INT,
-    @RoleID INT,     -- maps to position_id in schema
+    @RoleID INT,                -- maps to Position.position_id
     @HireDate DATE,
     @Email VARCHAR(100),
-    @Phone VARCHAR(20)
+    @Phone VARCHAR(20),
+    @NationalID VARCHAR(50),
+    @DateOfBirth DATE,
+    @CountryOfBirth VARCHAR(100)
 AS
 BEGIN
     SET NOCOUNT ON;
 
-    INSERT INTO Employee (
-        first_name,
-        last_name,
-        email,
-        phone,
-        department_id,
-        position_id,
-        hire_date,
-        is_active,
-        profile_completion
-    )
-    VALUES (
-        @FirstName,
-        @LastName,
-        @Email,
-        @Phone,
-        @DepartmentID,
-        @RoleID,
-        @HireDate,
-        1,
-        0
-    );
+    BEGIN TRY
+        BEGIN TRANSACTION;
 
-    SELECT 
-        SCOPE_IDENTITY() AS EmployeeID,
-        'Employee profile created successfully.' AS Message;
+        -- Validate department exists
+        IF NOT EXISTS (SELECT 1 FROM Department WHERE department_id = @DepartmentID)
+        BEGIN
+            RAISERROR('Department does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        -- Validate position exists
+        IF NOT EXISTS (SELECT 1 FROM Position WHERE position_id = @RoleID)
+        BEGIN
+            RAISERROR('Position (RoleID) does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        -- Validate unique email
+        IF EXISTS (SELECT 1 FROM Employee WHERE email = @Email)
+        BEGIN
+            RAISERROR('Email already exists for another employee.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        -- Insert new employee profile
+        INSERT INTO Employee (
+            first_name,
+            last_name,
+            national_id,
+            date_of_birth,
+            country_of_birth,
+            email,
+            phone,
+            department_id,
+            position_id,
+            hire_date,
+            is_active,
+            profile_completion,
+            account_status,
+            employment_status
+        )
+        VALUES (
+            @FirstName,
+            @LastName,
+            @NationalID,
+            @DateOfBirth,
+            @CountryOfBirth,
+            @Email,
+            @Phone,
+            @DepartmentID,
+            @RoleID,
+            @HireDate,
+            1,                 -- active
+            0,                 -- profile incomplete
+            'Active',
+            'Full-time'
+        );
+
+        DECLARE @NewEmployeeID INT = SCOPE_IDENTITY();
+
+        COMMIT TRANSACTION;
+
+        SELECT 
+            @NewEmployeeID AS EmployeeID,
+            'Employee profile created successfully.' AS Message;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
+
 END;
 GO
 
 
--- 12. UpdateEmployeeProfile**
+
+-- 12 UpdateEmployeeProfile
+-- PROCEDURE: UpdateEmployeeProfile
 CREATE PROCEDURE UpdateEmployeeProfile
     @EmployeeID INT,
     @FieldName VARCHAR(50),
     @NewValue VARCHAR(255)
 AS
 BEGIN
-    IF @FieldName = 'first_name'
-        UPDATE Employee SET first_name = @NewValue WHERE employee_id = @EmployeeID;
-    ELSE IF @FieldName = 'last_name'
-        UPDATE Employee SET last_name = @NewValue WHERE employee_id = @EmployeeID;
-    ELSE IF @FieldName = 'email'
-        UPDATE Employee SET email = @NewValue WHERE employee_id = @EmployeeID;
-    ELSE IF @FieldName = 'phone'
-        UPDATE Employee SET phone = @NewValue WHERE employee_id = @EmployeeID;
-    ELSE IF @FieldName = 'address'
-        UPDATE Employee SET address = @NewValue WHERE employee_id = @EmployeeID;
-    ELSE IF @FieldName = 'emergency_contact_name'
-        UPDATE Employee SET emergency_contact_name = @NewValue WHERE employee_id = @EmployeeID;
-    ELSE IF @FieldName = 'emergency_contact_phone'
-        UPDATE Employee SET emergency_contact_phone = @NewValue WHERE employee_id = @EmployeeID;
-    ELSE IF @FieldName = 'biography'
-        UPDATE Employee SET biography = @NewValue WHERE employee_id = @EmployeeID;
-    ELSE IF @FieldName = 'employment_status'
-        UPDATE Employee SET employment_status = @NewValue WHERE employee_id = @EmployeeID;
-    ELSE IF @FieldName = 'account_status'
-        UPDATE Employee SET account_status = @NewValue WHERE employee_id = @EmployeeID;
-    ELSE
-    BEGIN
-        SELECT 'Error: Invalid field name' AS ConfirmationMessage;
-        RETURN;
-    END
+    SET NOCOUNT ON;
 
-    SELECT 'Employee profile updated successfully' AS ConfirmationMessage;
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        -- Validate employee exists
+        IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @EmployeeID)
+        BEGIN
+            RAISERROR('Employee does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ----------------------------------------------------------------------
+        -- VALID FIELD LIST (PREVENTS SQL INJECTION & INVALID COLUMN ERRORS)
+        ----------------------------------------------------------------------
+        DECLARE @AllowedFields TABLE (field_name VARCHAR(50));
+        INSERT INTO @AllowedFields VALUES
+            ('first_name'),
+            ('last_name'),
+            ('email'),
+            ('phone'),
+            ('address'),
+            ('emergency_contact_name'),
+            ('emergency_contact_phone'),
+            ('biography'),
+            ('employment_status'),
+            ('account_status');
+
+        IF NOT EXISTS (SELECT 1 FROM @AllowedFields WHERE field_name = @FieldName)
+        BEGIN
+            RAISERROR('Invalid or unauthorized field name.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ----------------------------------------------------------------------
+        -- PREVENT DUPLICATE EMAILS
+        ----------------------------------------------------------------------
+        IF @FieldName = 'email'
+        BEGIN
+            IF EXISTS (SELECT 1 FROM Employee WHERE email = @NewValue AND employee_id <> @EmployeeID)
+            BEGIN
+                RAISERROR('Email already exists for another employee.', 16, 1);
+                ROLLBACK TRANSACTION;
+                RETURN;
+            END;
+        END;
+
+        ----------------------------------------------------------------------
+        -- DYNAMIC SQL TO UPDATE ONLY VALID FIELD NAMES
+        ----------------------------------------------------------------------
+        DECLARE @SQL NVARCHAR(MAX) =
+            N'UPDATE Employee SET ' + QUOTENAME(@FieldName) + N' = @Value WHERE employee_id = @ID';
+
+        EXEC sys.sp_executesql 
+            @SQL,
+            N'@Value VARCHAR(255), @ID INT',
+            @Value = @NewValue,
+            @ID = @EmployeeID;
+
+        COMMIT TRANSACTION;
+
+        SELECT 'Employee profile updated successfully' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
 END;
 GO
 
 
--- 13. SetProfileCompleteness
-CREATE PROCEDURE [SetProfileCompleteness]
+
+-- 13 SetProfileCompleteness
+-- PROCEDURE: SetProfileCompleteness
+CREATE PROCEDURE SetProfileCompleteness
     @EmployeeID INT,
     @CompletenessPercentage INT
 AS
 BEGIN
-UPDATE Employee
-SET profile_completion = @CompletenessPercentage
-WHERE employee_id = @EmployeeID;
+    SET NOCOUNT ON;
 
-SELECT 
-        'Profile completeness updated to ' + CAST(@CompletenessPercentage AS VARCHAR(10)) + '%' AS ConfirmationMessage,
-        @CompletenessPercentage AS UpdatedCompleteness;
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        -- Validate employee exists
+        IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @EmployeeID)
+        BEGIN
+            RAISERROR('Employee does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        -- Validate range (0–100)
+        IF @CompletenessPercentage < 0 OR @CompletenessPercentage > 100
+        BEGIN
+            RAISERROR('Completeness percentage must be between 0 and 100.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        -- Update completeness
+        UPDATE Employee
+        SET profile_completion = @CompletenessPercentage
+        WHERE employee_id = @EmployeeID;
+
+        COMMIT TRANSACTION;
+
+        SELECT 
+            'Profile completeness updated to ' 
+            + CAST(@CompletenessPercentage AS VARCHAR(10)) + '%' AS ConfirmationMessage,
+            @CompletenessPercentage AS UpdatedCompleteness;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
+
 END;
-
 GO
 
--- 14. GenerateProfileReport
+
+-- 14 GenerateProfileReport
+-- PROCEDURE: GenerateProfileReport
 CREATE PROCEDURE GenerateProfileReport
     @FilterField VARCHAR(50),
     @FilterValue VARCHAR(100)
 AS
 BEGIN
+    SET NOCOUNT ON;
+
+    --------------------------------------------------------------------
+    -- VALIDATION OF ALLOWED FILTER FIELDS (prevents SQL injection)
+    --------------------------------------------------------------------
+    DECLARE @Allowed TABLE (FieldName VARCHAR(50));
+    INSERT INTO @Allowed VALUES
+        ('department'),
+        ('employment_status'),
+        ('country_of_birth'),
+        ('all');
+
+    IF NOT EXISTS (SELECT 1 FROM @Allowed WHERE FieldName = @FilterField)
+    BEGIN
+        RAISERROR('Invalid filter field.', 16, 1);
+        RETURN;
+    END;
+
+    --------------------------------------------------------------------
+    -- RETURN ALL EMPLOYEES IF FILTER = 'all'
+    --------------------------------------------------------------------
+    IF @FilterField = 'all'
+    BEGIN
+        SELECT 
+            e.employee_id,
+            e.full_name,
+            e.email,
+            e.phone,
+            e.country_of_birth,
+            d.department_name,
+            p.position_title,
+            e.hire_date,
+            e.employment_status
+        FROM Employee e
+        LEFT JOIN Department d ON e.department_id = d.department_id
+        LEFT JOIN Position p ON e.position_id = p.position_id;
+        
+        RETURN;
+    END;
+
+    --------------------------------------------------------------------
+    -- FILTER BY SPECIFIC FIELDS
+    --------------------------------------------------------------------
     SELECT 
         e.employee_id,
         e.full_name,
@@ -642,28 +818,79 @@ BEGIN
     WHERE 
         (@FilterField = 'department' AND d.department_name = @FilterValue)
         OR (@FilterField = 'employment_status' AND e.employment_status = @FilterValue)
-        OR (@FilterField = 'country_of_birth' AND e.country_of_birth = @FilterValue)
-        OR (@FilterField = 'all');
+        OR (@FilterField = 'country_of_birth' AND e.country_of_birth = @FilterValue);
 END;
 GO
 
--- 15. CreateShiftType
+
+-- 15 CreateShiftType
+-- PROCEDURE: CreateShiftType
 CREATE PROCEDURE CreateShiftType
-    @ShiftTypeName VARCHAR(50),
-    @Description VARCHAR(200)
+    @ShiftID INT,
+    @Name VARCHAR(100),
+    @Type VARCHAR(50),
+    @Start_Time TIME,
+    @End_Time TIME,
+    @Break_Duration INT,
+    @Shift_Date DATE,
+    @Status VARCHAR(50)
 AS
 BEGIN
     SET NOCOUNT ON;
 
-    INSERT INTO ShiftType (name, description)
-    VALUES (@ShiftTypeName, @Description);
+    BEGIN TRY
+        BEGIN TRANSACTION;
 
-    SELECT 'Shift type created successfully.' AS Message;
+        -- If ShiftID is provided (not null), check if it exists
+        IF EXISTS (SELECT 1 FROM ShiftSchedule WHERE shift_id = @ShiftID)
+        BEGIN
+            RAISERROR('Shift ID already exists. Use a new ID or an auto-generated ID.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        -- Insert into ShiftSchedule
+        INSERT INTO ShiftSchedule
+        (
+            name,
+            type,
+            start_time,
+            end_time,
+            break_duration,
+            shift_date,
+            status
+        )
+        VALUES
+        (
+            @Name,
+            @Type,
+            @Start_Time,
+            @End_Time,
+            @Break_Duration,
+            @Shift_Date,
+            @Status
+        );
+
+        DECLARE @NewShiftID INT = SCOPE_IDENTITY();
+
+        COMMIT TRANSACTION;
+
+        SELECT 
+            @NewShiftID AS ShiftID,
+            'Shift type created successfully.' AS Message;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
 END;
 GO
 
 
--- 17. AssignRotationalShift
+
+-- 17 AssignRotationalShift
+-- PROCEDURE: AssignRotationalShift
 CREATE PROCEDURE AssignRotationalShift
     @EmployeeID INT,
     @ShiftCycle INT,
@@ -672,48 +899,144 @@ CREATE PROCEDURE AssignRotationalShift
     @Status VARCHAR(20)
 AS
 BEGIN
-    INSERT INTO ShiftAssignment (employee_id, shift_id, start_date, end_date, status)
-    SELECT 
-        @EmployeeID,
-        sca.shift_id,
-        @StartDate,
-        @EndDate,
-        @Status
-    FROM ShiftCycleAssignment sca
-    WHERE sca.cycle_id = @ShiftCycle
-    ORDER BY sca.order_number;
+    SET NOCOUNT ON;
 
-    SELECT 'Rotational shift assigned successfully to employee ' + CAST(@EmployeeID AS VARCHAR(10)) AS ConfirmationMessage;
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        ------------------------------------------------------------------
+        -- Validate employee exists
+        ------------------------------------------------------------------
+        IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @EmployeeID)
+        BEGIN
+            RAISERROR('Employee does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ------------------------------------------------------------------
+        -- Validate shift cycle exists
+        ------------------------------------------------------------------
+        IF NOT EXISTS (SELECT 1 FROM ShiftCycle WHERE cycle_id = @ShiftCycle)
+        BEGIN
+            RAISERROR('Shift cycle does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ------------------------------------------------------------------
+        -- Validate cycle has shift assignments
+        ------------------------------------------------------------------
+        IF NOT EXISTS (SELECT 1 FROM ShiftCycleAssignment WHERE cycle_id = @ShiftCycle)
+        BEGIN
+            RAISERROR('Shift cycle has no assigned shifts.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ------------------------------------------------------------------
+        -- Insert one record per shift in the cycle (Morning/Evening/Night…)
+        ------------------------------------------------------------------
+        INSERT INTO ShiftAssignment (employee_id, shift_id, start_date, end_date, status)
+        SELECT 
+            @EmployeeID,
+            sca.shift_id,
+            @StartDate,
+            @EndDate,
+            @Status
+        FROM ShiftCycleAssignment sca
+        WHERE sca.cycle_id = @ShiftCycle
+        ORDER BY sca.order_number;
+
+        ------------------------------------------------------------------
+        -- Return confirmation
+        ------------------------------------------------------------------
+        SELECT 
+            'Rotational shift assigned successfully to employee ' +
+            CAST(@EmployeeID AS VARCHAR(10)) AS ConfirmationMessage;
+
+        COMMIT TRANSACTION;
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
 END;
 GO
 
--- 18. NotifyShiftExpiry
+
+-- 18 NotifyShiftExpiry
+-- PROCEDURE: NotifyShiftExpiry
 CREATE PROCEDURE NotifyShiftExpiry
     @EmployeeID INT,
     @ShiftAssignmentID INT,
     @ExpiryDate DATE
 AS
 BEGIN
-    INSERT INTO Notification (message_content, urgency, notification_type)
-    VALUES (
-        'Your shift assignment ID ' + CAST(@ShiftAssignmentID AS VARCHAR(50)) + 
-        ' is expiring on ' + CAST(@ExpiryDate AS VARCHAR(50)),
-        'High',
-        'Shift Expiry'
-    );
+    SET NOCOUNT ON;
 
-    INSERT INTO Employee_Notification (employee_id, notification_id, delivery_status, delivered_at)
-    VALUES (
-        @EmployeeID,
-        SCOPE_IDENTITY(),
-        'Pending',
-        GETDATE()
-    );
+    BEGIN TRY
+        BEGIN TRANSACTION;
 
-    SELECT 'Shift expiry notification sent successfully' AS ConfirmationMessage;
+        ------------------------------------------------------------
+        -- Validate Employee
+        ------------------------------------------------------------
+        IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @EmployeeID)
+        BEGIN
+            RAISERROR('Employee does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ------------------------------------------------------------
+        -- Validate Shift Assignment
+        ------------------------------------------------------------
+        IF NOT EXISTS (SELECT 1 FROM ShiftAssignment WHERE assignment_id = @ShiftAssignmentID)
+        BEGIN
+            RAISERROR('Shift assignment does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ------------------------------------------------------------
+        -- Create Notification
+        ------------------------------------------------------------
+        INSERT INTO Notification (message_content, urgency, read_status, notification_type)
+        VALUES (
+            'Your shift assignment ID ' + CAST(@ShiftAssignmentID AS VARCHAR(20)) +
+            ' is expiring on ' + CONVERT(VARCHAR(10), @ExpiryDate, 120),
+            'High',
+            0,
+            'Shift Expiry'
+        );
+
+        DECLARE @NotifID INT = SCOPE_IDENTITY();
+
+        ------------------------------------------------------------
+        -- Assign notification to employee
+        ------------------------------------------------------------
+        INSERT INTO Employee_Notification (employee_id, notification_id, delivery_status, delivered_at)
+        VALUES (
+            @EmployeeID,
+            @NotifID,
+            'Pending',
+            GETDATE()
+        );
+
+        COMMIT TRANSACTION;
+
+        SELECT 'Shift expiry notification sent successfully' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
 END;
 GO
--- 19. DefineShortTimeRules
+
+-- 19 DefineShortTimeRules
+-- PROCEDURE: DefineShortTimeRules
 CREATE PROCEDURE DefineShortTimeRules
     @RuleName VARCHAR(50),
     @LateMinutes INT,
@@ -721,18 +1044,53 @@ CREATE PROCEDURE DefineShortTimeRules
     @PenaltyType VARCHAR(50)
 AS
 BEGIN
-    INSERT INTO PayrollPolicy (effective_date, type, description)
-    VALUES (
-        GETDATE(),
-        'Short Time',
-        @RuleName + ' - Late arrival penalty after ' + CAST(@LateMinutes AS VARCHAR(10)) + 
-        ' mins, Early leave penalty after ' + CAST(@EarlyLeaveMinutes AS VARCHAR(10)) + 
-        ' mins. Penalty type: ' + @PenaltyType
-    );
+    SET NOCOUNT ON;
 
-    SELECT 'Short time rule defined successfully' AS ConfirmationMessage;
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        -- Validate rule name
+        IF LEN(@RuleName) = 0
+        BEGIN
+            RAISERROR('Rule name cannot be empty.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        -- Validate minutes
+        IF @LateMinutes < 0 OR @EarlyLeaveMinutes < 0
+        BEGIN
+            RAISERROR('Minutes cannot be negative.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        -- Insert into PayrollPolicy
+        INSERT INTO PayrollPolicy (effective_date, type, description)
+        VALUES (
+            GETDATE(),
+            'Short Time',
+            @RuleName + ' - Late penalty after ' + CAST(@LateMinutes AS VARCHAR(10)) +
+            ' mins, Early leave penalty after ' + CAST(@EarlyLeaveMinutes AS VARCHAR(10)) +
+            ' mins. Penalty type: ' + @PenaltyType
+        );
+
+        DECLARE @NewPolicyID INT = SCOPE_IDENTITY();
+
+        COMMIT TRANSACTION;
+
+        SELECT 
+            @NewPolicyID AS PolicyID,
+            'Short time rule defined successfully' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
 END;
 GO
+
 
 --20. SetGracePeriod
 CREATE PROCEDURE SetGracePeriod

@@ -1,21 +1,57 @@
 --System admin
--- 1. ViewEmployeeInfo
-GO
+-- 1 ViewEmployeeInfo
 CREATE PROCEDURE ViewEmployeeInfo
     @EmployeeID INT
 AS
 BEGIN
+    SET NOCOUNT ON;
+
+    ---------------------------------------------------------
+    -- Validate employee exists
+    ---------------------------------------------------------
+    IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @EmployeeID)
+    BEGIN
+        SELECT 'Employee does not exist.' AS ErrorMessage;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- Return full employee information
+    ---------------------------------------------------------
     SELECT 
-        e.*,
+        e.employee_id,
+        e.full_name,
+        e.first_name,
+        e.last_name,
+        e.email,
+        e.phone,
+        e.address,
+        e.employment_status,
+        e.account_status,
+        e.hire_date,
+        e.date_of_birth,
+        e.country_of_birth,
+        e.profile_completion,
+
+        -- Department & Position
         d.department_name,
         p.position_title,
-        c.type AS contract_type,
+
+        -- Contract info
+        c.[type] AS contract_type,
         c.start_date AS contract_start,
         c.end_date AS contract_end,
-        st.type AS salary_type,
+
+        -- Salary type
+        st.[type] AS salary_type,
+        st.payment_frequency,
+        st.currency_code,
+
+        -- Pay grade
         pg.grade_name,
         pg.min_salary,
         pg.max_salary
+
     FROM Employee e
     LEFT JOIN Department d ON e.department_id = d.department_id
     LEFT JOIN Position p ON e.position_id = p.position_id
@@ -27,48 +63,100 @@ END;
 GO
 
 
+
+-- 2 AddEmployee
 CREATE PROCEDURE AddEmployee
-    @FullName VARCHAR(100),
+    @FullName VARCHAR(200),
+    @NationalID VARCHAR(50),
+    @DateOfBirth DATE,
+    @CountryOfBirth VARCHAR(100),
+    @Phone VARCHAR(50),
     @Email VARCHAR(100),
+    @Address VARCHAR(255),
+    @EmergencyContactName VARCHAR(100),
+    @EmergencyContactPhone VARCHAR(50),
+    @Relationship VARCHAR(50),
+    @Biography VARCHAR(MAX),
+    @EmploymentProgress VARCHAR(100),
+    @AccountStatus VARCHAR(50),
+    @EmploymentStatus VARCHAR(50),
+    @HireDate DATE,
+    @IsActive BIT,
+    @ProfileCompletion INT,
     @DepartmentID INT,
     @PositionID INT,
-    @HireDate DATE
+    @ManagerID INT,
+    @ContractID INT,
+    @TaxFormID INT,
+    @SalaryTypeID INT,
+    @PayGrade INT
 AS
 BEGIN
     SET NOCOUNT ON;
 
-    DECLARE @FirstName VARCHAR(50);
-    DECLARE @LastName VARCHAR(50);
+    ---------------------------------------------------------
+    -- 1. Split full name into first & last names
+    ---------------------------------------------------------
+    DECLARE @FirstName VARCHAR(50), @LastName VARCHAR(50);
 
-    -- Split @FullName into first and last name
-    SET @FirstName = LEFT(@FullName, CHARINDEX(' ', @FullName + ' ') - 1);
-    SET @LastName  = SUBSTRING(@FullName, CHARINDEX(' ', @FullName + ' ') + 1, LEN(@FullName));
+    IF CHARINDEX(' ', @FullName) > 0
+    BEGIN
+        SET @FirstName = LEFT(@FullName, CHARINDEX(' ', @FullName) - 1);
+        SET @LastName  = SUBSTRING(@FullName, CHARINDEX(' ', @FullName) + 1, LEN(@FullName));
+    END
+    ELSE
+    BEGIN
+        SET @FirstName = @FullName;
+        SET @LastName  = '';
+    END
 
-    -- Insert without touching full_name (computed column)
+    ---------------------------------------------------------
+    -- 2. Prevent duplicate National ID or Email
+    ---------------------------------------------------------
+    IF EXISTS (SELECT 1 FROM Employee WHERE national_id = @NationalID)
+    BEGIN
+        SELECT 'Error: National ID already exists.' AS ErrorMessage;
+        RETURN;
+    END;
+
+    IF EXISTS (SELECT 1 FROM Employee WHERE email = @Email)
+    BEGIN
+        SELECT 'Error: Email already exists.' AS ErrorMessage;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 3. Insert employee
+    ---------------------------------------------------------
     INSERT INTO Employee (
-        first_name,
-        last_name,
-        email,
-        department_id,
-        position_id,
-        hire_date,
-        is_active
+        first_name, last_name, national_id, date_of_birth,
+        country_of_birth, phone, email, address,
+        emergency_contact_name, emergency_contact_phone, relationship,
+        biography, employment_progress, account_status, employment_status,
+        hire_date, is_active, profile_completion,
+        department_id, position_id, manager_id,
+        contract_id, tax_form_id, salary_type_id, pay_grade
     )
     VALUES (
-        @FirstName,
-        @LastName,
-        @Email,
-        @DepartmentID,
-        @PositionID,
-        @HireDate,
-        1
+        @FirstName, @LastName, @NationalID, @DateOfBirth,
+        @CountryOfBirth, @Phone, @Email, @Address,
+        @EmergencyContactName, @EmergencyContactPhone, @Relationship,
+        @Biography, @EmploymentProgress, @AccountStatus, @EmploymentStatus,
+        @HireDate, @IsActive, @ProfileCompletion,
+        @DepartmentID, @PositionID, @ManagerID,
+        @ContractID, @TaxFormID, @SalaryTypeID, @PayGrade
     );
 
+    ---------------------------------------------------------
+    -- 4. Return new employee ID
+    ---------------------------------------------------------
     SELECT 
         SCOPE_IDENTITY() AS NewEmployeeID,
         'Employee added successfully.' AS ConfirmationMessage;
+
 END;
 GO
+
 
 
 -- 3. UpdateEmployeeInfo
@@ -79,16 +167,46 @@ CREATE PROCEDURE UpdateEmployeeInfo
     @Address VARCHAR(150)
 AS
 BEGIN
+    SET NOCOUNT ON;
+
+    ---------------------------------------------------------
+    -- 1. Check employee exists
+    ---------------------------------------------------------
+    IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @EmployeeID)
+    BEGIN
+        SELECT 'Error: Employee not found.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 2. Prevent duplicate email
+    ---------------------------------------------------------
+    IF EXISTS (
+        SELECT 1
+        FROM Employee
+        WHERE email = @Email AND employee_id <> @EmployeeID
+    )
+    BEGIN
+        SELECT 'Error: This email is already used by another employee.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 3. Update employee info
+    ---------------------------------------------------------
     UPDATE Employee
     SET email = @Email,
         phone = @Phone,
         address = @Address
     WHERE employee_id = @EmployeeID;
 
+    ---------------------------------------------------------
+    -- 4. Confirmation
+    ---------------------------------------------------------
     SELECT 'Employee information updated successfully' AS ConfirmationMessage;
 END;
 GO
--- 4. AssignRole
+
 CREATE PROCEDURE AssignRole
     @EmployeeID INT,
     @RoleID INT
@@ -96,7 +214,40 @@ AS
 BEGIN
     SET NOCOUNT ON;
 
-    -- Check if the employee already has this role
+    ---------------------------------------------------------
+    -- 1. Validate employee exists
+    ---------------------------------------------------------
+    IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @EmployeeID)
+    BEGIN
+        SELECT 'Error: Employee does not exist.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 2. Validate role exists
+    ---------------------------------------------------------
+    IF NOT EXISTS (SELECT 1 FROM Role WHERE role_id = @RoleID)
+    BEGIN
+        SELECT 'Error: Role does not exist.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 3. Prevent assigning role to inactive employees
+    ---------------------------------------------------------
+    IF EXISTS (
+        SELECT 1 
+        FROM Employee 
+        WHERE employee_id = @EmployeeID AND is_active = 0
+    )
+    BEGIN
+        SELECT 'Error: Cannot assign roles to inactive employees.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 4. Check if the employee already has the role
+    ---------------------------------------------------------
     IF EXISTS (
         SELECT 1 
         FROM Employee_Role
@@ -106,24 +257,32 @@ BEGIN
     BEGIN
         SELECT 'Role already assigned to this employee.' AS Message;
         RETURN;
-    END
+    END;
 
-    -- Insert new role assignment
+    ---------------------------------------------------------
+    -- 5. Assign the new role
+    ---------------------------------------------------------
     INSERT INTO Employee_Role (employee_id, role_id, assigned_date)
     VALUES (@EmployeeID, @RoleID, GETDATE());
 
+    ---------------------------------------------------------
+    -- 6. Confirmation message
+    ---------------------------------------------------------
     SELECT 'Role assigned successfully.' AS Message;
 END;
 GO
+
 
 -- 5. GetDepartmentEmployeeStats
 CREATE PROCEDURE GetDepartmentEmployeeStats
 AS
 BEGIN
+    SET NOCOUNT ON;
+
     SELECT 
         d.department_id,
         d.department_name,
-        COUNT(e.employee_id) AS number_of_employees
+        ISNULL(COUNT(e.employee_id), 0) AS number_of_employees
     FROM Department d
     LEFT JOIN Employee e ON d.department_id = e.department_id
     GROUP BY d.department_id, d.department_name
@@ -131,16 +290,67 @@ BEGIN
 END;
 GO
 
+
 -- 6. ReassignManager
 CREATE PROCEDURE ReassignManager
     @EmployeeID INT,
     @NewManagerID INT
 AS
 BEGIN
+    SET NOCOUNT ON;
+
+    ---------------------------------------------------------
+    -- 1. Validate Employee Exists
+    ---------------------------------------------------------
+    IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @EmployeeID)
+    BEGIN
+        SELECT 'Error: Employee does not exist.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 2. Validate New Manager Exists (unless NULL)
+    ---------------------------------------------------------
+    IF @NewManagerID IS NOT NULL AND 
+       NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @NewManagerID)
+    BEGIN
+        SELECT 'Error: New manager does not exist.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 3. Prevent Employee from managing themselves
+    ---------------------------------------------------------
+    IF @EmployeeID = @NewManagerID
+    BEGIN
+        SELECT 'Error: An employee cannot be their own manager.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 4. Prevent circular management (Employee → Manager → Employee)
+    ---------------------------------------------------------
+    IF EXISTS (
+        SELECT 1
+        FROM EmployeeHierarchy
+        WHERE employee_id = @NewManagerID 
+        AND manager_id = @EmployeeID
+    )
+    BEGIN
+        SELECT 'Error: Circular hierarchy detected.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 5. Update Employee Table
+    ---------------------------------------------------------
     UPDATE Employee
     SET manager_id = @NewManagerID
     WHERE employee_id = @EmployeeID;
 
+    ---------------------------------------------------------
+    -- 6. Update or Insert EmployeeHierarchy
+    ---------------------------------------------------------
     IF EXISTS (SELECT 1 FROM EmployeeHierarchy WHERE employee_id = @EmployeeID)
     BEGIN
         UPDATE EmployeeHierarchy
@@ -151,11 +361,16 @@ BEGIN
     BEGIN
         INSERT INTO EmployeeHierarchy (employee_id, manager_id, hierarchy_level)
         VALUES (@EmployeeID, @NewManagerID, 1);
-    END
+    END;
 
-    SELECT 'Manager reassigned successfully for employee ' + CAST(@EmployeeID AS VARCHAR(10)) AS ConfirmationMessage;
+    ---------------------------------------------------------
+    -- 7. Confirmation Message
+    ---------------------------------------------------------
+    SELECT 'Manager reassigned successfully for employee ' 
+            + CAST(@EmployeeID AS VARCHAR(10)) AS ConfirmationMessage;
 END;
 GO
+
 -- 7. ReassignHierarchy
 CREATE PROCEDURE ReassignHierarchy
     @EmployeeID INT,
@@ -163,26 +378,91 @@ CREATE PROCEDURE ReassignHierarchy
     @NewManagerID INT
 AS
 BEGIN
+    SET NOCOUNT ON;
+
+    ---------------------------------------------------------
+    -- 1. Validate Employee Exists
+    ---------------------------------------------------------
+    IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @EmployeeID)
+    BEGIN
+        SELECT 'Error: Employee does not exist.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 2. Validate Department Exists
+    ---------------------------------------------------------
+    IF NOT EXISTS (SELECT 1 FROM Department WHERE department_id = @NewDepartmentID)
+    BEGIN
+        SELECT 'Error: Department does not exist.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 3. Validate Manager Exists (unless NULL)
+    ---------------------------------------------------------
+    IF @NewManagerID IS NOT NULL AND
+       NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @NewManagerID)
+    BEGIN
+        SELECT 'Error: Manager does not exist.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 4. Prevent Employee Managing Themselves
+    ---------------------------------------------------------
+    IF @EmployeeID = @NewManagerID
+    BEGIN
+        SELECT 'Error: Employee cannot be their own manager.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 5. Prevent Circular Hierarchy
+    ---------------------------------------------------------
+    IF EXISTS (
+        SELECT 1
+        FROM EmployeeHierarchy
+        WHERE employee_id = @NewManagerID
+        AND manager_id = @EmployeeID
+    )
+    BEGIN
+        SELECT 'Error: Circular hierarchy detected.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 6. Update Employee Table
+    ---------------------------------------------------------
     UPDATE Employee
     SET department_id = @NewDepartmentID,
         manager_id = @NewManagerID
     WHERE employee_id = @EmployeeID;
 
+    ---------------------------------------------------------
+    -- 7. Update or Insert EmployeeHierarchy
+    ---------------------------------------------------------
     IF EXISTS (SELECT 1 FROM EmployeeHierarchy WHERE employee_id = @EmployeeID)
     BEGIN
         UPDATE EmployeeHierarchy
-        SET manager_id = @NewManagerID
+        SET manager_id = @NewManagerID,
+            hierarchy_level = 1
         WHERE employee_id = @EmployeeID;
     END
     ELSE
     BEGIN
         INSERT INTO EmployeeHierarchy (employee_id, manager_id, hierarchy_level)
         VALUES (@EmployeeID, @NewManagerID, 1);
-    END
+    END;
 
-    SELECT 'Employee hierarchy reassigned successfully for employee ' + CAST(@EmployeeID AS VARCHAR(10)) AS ConfirmationMessage;
+    ---------------------------------------------------------
+    -- 8. Confirmation Message
+    ---------------------------------------------------------
+    SELECT 'Hierarchy reassigned successfully for employee ' 
+           + CAST(@EmployeeID AS VARCHAR(10)) AS ConfirmationMessage;
 END;
 GO
+
 
 -- 8. NotifyStructureChange
 CREATE PROCEDURE NotifyStructureChange
@@ -190,40 +470,83 @@ CREATE PROCEDURE NotifyStructureChange
     @Message VARCHAR(200)
 AS
 BEGIN
+    SET NOCOUNT ON;
+
+    ---------------------------------------------------------
+    -- 1. Validate input
+    ---------------------------------------------------------
+    IF @AffectedEmployees IS NULL OR LTRIM(RTRIM(@AffectedEmployees)) = ''
+    BEGIN
+        SELECT 'Error: No affected employees provided.' AS Message;
+        RETURN;
+    END;
+
+    IF @Message IS NULL OR LTRIM(RTRIM(@Message)) = ''
+    BEGIN
+        SELECT 'Error: Message cannot be empty.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 2. Create Notification and store ID safely
+    ---------------------------------------------------------
     INSERT INTO Notification (message_content, urgency, notification_type)
     VALUES (@Message, 'High', 'Structure Change');
 
+    DECLARE @NotificationID INT = SCOPE_IDENTITY();
+
+    ---------------------------------------------------------
+    -- 3. Insert notifications for valid employees only
+    ---------------------------------------------------------
     INSERT INTO Employee_Notification (employee_id, notification_id, delivery_status, delivered_at)
     SELECT 
-        CAST(value AS INT),
-        SCOPE_IDENTITY(),
+        e.employee_id,
+        @NotificationID,
         'Sent',
         GETDATE()
-    FROM STRING_SPLIT(@AffectedEmployees, ',');
+    FROM STRING_SPLIT(@AffectedEmployees, ',') s
+    INNER JOIN Employee e ON e.employee_id = TRY_CAST(s.value AS INT);
 
-    SELECT 'Structure change notification sent to affected employees' AS ConfirmationMessage;
+    ---------------------------------------------------------
+    -- 4. Return confirmation
+    ---------------------------------------------------------
+    SELECT 
+        'Structure change notification sent to affected employees.' 
+        AS ConfirmationMessage;
 END;
 GO
+
 
 -- 9. ViewOrgHierarchy
 CREATE PROCEDURE ViewOrgHierarchy
 AS
 BEGIN
+    SET NOCOUNT ON;
+
     SELECT 
         e.employee_id,
         e.full_name AS employee_name,
         m.full_name AS manager_name,
         d.department_name,
         p.position_title,
-        eh.hierarchy_level
+        ISNULL(eh.hierarchy_level, 1) AS hierarchy_level
     FROM Employee e
-    LEFT JOIN Employee m ON e.manager_id = m.employee_id
-    LEFT JOIN Department d ON e.department_id = d.department_id
-    LEFT JOIN Position p ON e.position_id = p.position_id
-    LEFT JOIN EmployeeHierarchy eh ON e.employee_id = eh.employee_id
-    ORDER BY eh.hierarchy_level, d.department_name, e.full_name;
+    LEFT JOIN Employee m 
+        ON e.manager_id = m.employee_id
+    LEFT JOIN Department d 
+        ON e.department_id = d.department_id
+    LEFT JOIN Position p 
+        ON e.position_id = p.position_id
+    LEFT JOIN EmployeeHierarchy eh 
+        ON e.employee_id = eh.employee_id
+    ORDER BY 
+        ISNULL(eh.hierarchy_level, 1),
+        d.department_name,
+        e.full_name;
 END;
 GO
+
+
 -- 10. AssignShiftToEmployee
 CREATE PROCEDURE AssignShiftToEmployee
     @EmployeeID INT,

@@ -383,3 +383,193 @@ WHERE type = 'Short Time'
 ORDER BY policy_id DESC;
 */
 
+-- 20 SetGracePeriod
+/*
+SELECT policy_id, type, description
+FROM PayrollPolicy
+ORDER BY policy_id;
+
+SELECT * FROM LatenessPolicy;
+
+EXEC SetGracePeriod @Minutes = 15;
+
+SELECT policy_id, type, description
+FROM PayrollPolicy
+WHERE type = 'Lateness'
+ORDER BY policy_id DESC;
+
+SELECT * FROM LatenessPolicy ORDER BY policy_id DESC;
+*/
+
+
+-- 21 DefinePenaltyThreshold
+/*
+SELECT policy_id, type, description
+FROM PayrollPolicy
+ORDER BY policy_id;
+
+SELECT * FROM DeductionPolicy ORDER BY policy_id;
+
+EXEC DefinePenaltyThreshold
+    @LateMinutes = 15,
+    @DeductionType = 'Half-Day Deduction';
+
+SELECT policy_id, type, description
+FROM PayrollPolicy
+WHERE type = 'Lateness Penalty'
+ORDER BY policy_id DESC;
+
+SELECT *
+FROM DeductionPolicy
+ORDER BY policy_id DESC;
+*/
+
+-- 22 DefinePermissionLimits
+/*
+SELECT policy_id, type, description
+FROM PayrollPolicy
+ORDER BY policy_id;
+
+EXEC DefinePermissionLimits
+    @MinHours = 1,
+    @MaxHours = 4;
+SELECT policy_id, type, description
+FROM PayrollPolicy
+WHERE type = 'Permission Limits'
+ORDER BY policy_id DESC;
+*/
+
+-- 23 EscalatePendingRequests (Before)
+/*
+SELECT request_id, status, approval_timing FROM LeaveRequest;
+SELECT request_id, status, date FROM AttendanceCorrectionRequest;
+SELECT reimbursement_id, current_status, approval_date FROM Reimbursement;
+
+EXEC EscalatePendingRequests
+    @Deadline = '2024-12-31';
+
+SELECT request_id, status FROM LeaveRequest;
+SELECT request_id, status FROM AttendanceCorrectionRequest;
+SELECT reimbursement_id, current_status FROM Reimbursement;
+*/
+
+--24
+/*
+SELECT * FROM ShiftAssignment WHERE employee_id = 2;
+SELECT * FROM LeaveEntitlement WHERE employee_id = 2;
+SELECT * FROM [Leave];
+
+EXEC LinkVacationToShift
+    @VacationPackageID = 1,
+    @EmployeeID = 2;
+
+SELECT * FROM ShiftAssignment WHERE employee_id = 2;
+SELECT * FROM LeaveEntitlement WHERE employee_id = 2;
+*/
+--25
+/*
+SELECT policy_id, name, purpose, notice_period
+FROM LeavePolicy;
+
+EXEC ConfigureLeavePolicies;
+
+SELECT policy_id, name, purpose, eligibility_rules
+FROM LeavePolicy
+WHERE name = 'Default Leave Policy';
+*/
+
+-- 26 AuthenticateLeaveAdmin - BEFORE EXECUTE
+/*
+-- Check which employees exist
+SELECT employee_id, full_name
+FROM Employee;
+
+-- Check who is an HR Administrator
+SELECT * 
+FROM HRAdministrator;
+
+-- Check what roles employees have
+SELECT er.employee_id, r.role_name
+FROM Employee_Role er
+JOIN Role r ON er.role_id = r.role_id;
+
+EXEC AuthenticateLeaveAdmin 
+     @AdminID = 1,
+     @Password = 'anything';
+*/
+
+
+-- 27 ApplyLeaveConfiguration - BEFORE EXECUTE
+/*
+SELECT e.employee_id, e.full_name, le.leave_type_id, le.entitlement
+FROM Employee e
+LEFT JOIN LeaveEntitlement le ON e.employee_id = le.employee_id
+ORDER BY e.employee_id, le.leave_type_id;
+
+-- Check available leave types
+SELECT * FROM VacationLeave;
+SELECT * FROM SickLeave;
+SELECT * FROM ProbationLeave;
+SELECT * FROM HolidayLeave;
+
+EXEC ApplyLeaveConfiguration;
+
+
+ -- AFTER EXECUTE
+SELECT e.employee_id, e.full_name, le.leave_type_id, le.entitlement
+FROM Employee e
+LEFT JOIN LeaveEntitlement le ON e.employee_id = le.employee_id
+ORDER BY e.employee_id, le.leave_type_id;
+*/
+
+-- 28 UpdateLeaveEntitlements - BEFORE EXECUTE
+/*
+SELECT employee_id, full_name, contract_id
+FROM Employee
+ORDER BY employee_id;
+
+SELECT employee_id, leave_type_id, entitlement
+FROM LeaveEntitlement
+WHERE employee_id = 2;  -- Example: testing employee 2 (Sara)
+
+EXEC UpdateLeaveEntitlements @EmployeeID = 2;
+-- AFTER EXECUTE
+
+SELECT employee_id, leave_type_id, entitlement
+FROM LeaveEntitlement
+WHERE employee_id = 2
+ORDER BY leave_type_id;
+*/
+
+/*
+SELECT policy_id, name, eligibility_rules, special_leave_type
+FROM LeavePolicy
+ORDER BY policy_id;
+
+EXEC ConfigureLeaveEligibility
+    @LeaveType = 'Vacation',
+    @MinTenure = 12,
+    @EmployeeType = 'FullTime';
+
+SELECT policy_id, name, eligibility_rules, special_leave_type
+FROM LeavePolicy
+WHERE special_leave_type = 'Vacation'
+ORDER BY policy_id DESC;
+*/
+
+-- 30 ManageLeaveTypes - BEFORE EXECUTE
+/*
+SELECT leave_id, leave_type, leave_description
+FROM [Leave]
+ORDER BY leave_id;
+
+EXEC ManageLeaveTypes
+    @LeaveType = 'Marriage',
+    @Description = 'Paid leave for marriage events';
+
+-- AFTER EXECUTE
+SELECT leave_id, leave_type, leave_description
+FROM [Leave]
+ORDER BY leave_id;
+*/
+

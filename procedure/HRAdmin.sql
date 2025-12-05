@@ -1092,97 +1092,271 @@ END;
 GO
 
 
---20. SetGracePeriod
+-- 20 SetGracePeriod
+-- PROCEDURE: SetGracePeriod
 CREATE PROCEDURE SetGracePeriod
     @Minutes INT
 AS
 BEGIN
-    INSERT INTO PayrollPolicy (effective_date, type, description)
-    VALUES (
-        GETDATE(),
-        'Lateness',
-        'Grace period: First ' + CAST(@Minutes AS VARCHAR(10)) + ' minutes of lateness tolerated'
-    );
+    SET NOCOUNT ON;
 
-    INSERT INTO LatenessPolicy (policy_id, grace_period_mins, deduction_rate)
-    VALUES (
-        SCOPE_IDENTITY(),
-        @Minutes,
-        0.00
-    );
+    BEGIN TRY
+        BEGIN TRANSACTION;
 
-    SELECT 'Grace period set successfully' AS ConfirmationMessage;
+        ------------------------------------------------------------
+        -- Validate minutes
+        ------------------------------------------------------------
+        IF @Minutes < 0
+        BEGIN
+            RAISERROR('Grace minutes cannot be negative.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ------------------------------------------------------------
+        -- Insert into PayrollPolicy
+        ------------------------------------------------------------
+        INSERT INTO PayrollPolicy (effective_date, type, description)
+        VALUES (
+            GETDATE(),
+            'Lateness',
+            'Grace period: First ' + CAST(@Minutes AS VARCHAR(10)) +
+            ' minutes of lateness tolerated'
+        );
+
+        DECLARE @PolicyID INT = SCOPE_IDENTITY();
+
+        ------------------------------------------------------------
+        -- Insert into LatenessPolicy (required by schema)
+        ------------------------------------------------------------
+        INSERT INTO LatenessPolicy (policy_id, grace_period_mins, deduction_rate)
+        VALUES (
+            @PolicyID,
+            @Minutes,
+            0.00   -- No deduction during grace period
+        );
+
+        COMMIT TRANSACTION;
+
+        SELECT 
+            @PolicyID AS PolicyID,
+            'Grace period set successfully' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
 END;
 GO
---21) DefinePenaltyThreshold 
+
+-- 21 DefinePenaltyThreshold
+-- PROCEDURE: DefinePenaltyThreshold
 CREATE PROCEDURE DefinePenaltyThreshold
     @LateMinutes INT,
     @DeductionType VARCHAR(50)
 AS
 BEGIN
-    INSERT INTO PayrollPolicy (effective_date, type, description)
-    VALUES (
-        GETDATE(),
-        'Lateness Penalty',
-        'Penalty threshold: Lateness over ' + CAST(@LateMinutes AS VARCHAR(10)) + ' minutes'
-    );
+    SET NOCOUNT ON;
 
-    INSERT INTO DeductionPolicy (policy_id, deduction_reason, calculation_mode)
-    VALUES (
-        SCOPE_IDENTITY(),
-        @DeductionType,
-        'LateMinutes=' + CAST(@LateMinutes AS VARCHAR(10))
-    );
+    BEGIN TRY
+        BEGIN TRANSACTION;
 
-    SELECT 'Penalty threshold defined successfully' AS ConfirmationMessage;
+        ------------------------------------------------------------
+        -- VALIDATIONS
+        ------------------------------------------------------------
+
+        -- Late minutes cannot be negative
+        IF @LateMinutes < 0
+        BEGIN
+            RAISERROR('LateMinutes cannot be negative.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        -- Deduction type must not be empty
+        IF LEN(@DeductionType) = 0
+        BEGIN
+            RAISERROR('DeductionType cannot be empty.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ------------------------------------------------------------
+        -- 1. Insert into PayrollPolicy
+        ------------------------------------------------------------
+        INSERT INTO PayrollPolicy (effective_date, type, description)
+        VALUES (
+            GETDATE(),
+            'Lateness Penalty',
+            'Penalty threshold: Lateness over ' + CAST(@LateMinutes AS VARCHAR(10)) +
+            ' minutes. Deduction type: ' + @DeductionType
+        );
+
+        DECLARE @PolicyID INT = SCOPE_IDENTITY();
+
+        ------------------------------------------------------------
+        -- 2. Insert into DeductionPolicy (linked to PayrollPolicy)
+        ------------------------------------------------------------
+        INSERT INTO DeductionPolicy (policy_id, deduction_reason, calculation_mode)
+        VALUES (
+            @PolicyID,
+            @DeductionType,
+            'LateMinutes>' + CAST(@LateMinutes AS VARCHAR(10))
+        );
+
+        ------------------------------------------------------------
+        -- SUCCESS
+        ------------------------------------------------------------
+        COMMIT TRANSACTION;
+
+        SELECT 
+            @PolicyID AS PolicyID,
+            'Penalty threshold defined successfully' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
+
 END;
 GO
 
---22) DefinePermissionLimits************************************************************************************
+
+-- 22 DefinePermissionLimits
+-- PROCEDURE: DefinePermissionLimits
 CREATE PROCEDURE DefinePermissionLimits
     @MinHours INT,
     @MaxHours INT
 AS
 BEGIN
-    INSERT INTO PayrollPolicy (effective_date, type, description)
-    VALUES (
-        GETDATE(),
-        'PermissionLimits',
-        'MinHours=' + CAST(@MinHours AS VARCHAR(10)) + ';MaxHours=' + CAST(@MaxHours AS VARCHAR(10))
-    );
+    SET NOCOUNT ON;
 
-    SELECT 'Permission limits defined successfully' AS ConfirmationMessage;
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        ----------------------------------------------------------
+        -- VALIDATION
+        ----------------------------------------------------------
+
+        -- Hours cannot be negative
+        IF @MinHours < 0 OR @MaxHours < 0
+        BEGIN
+            RAISERROR('Hours cannot be negative.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        -- Max must be >= Min
+        IF @MaxHours < @MinHours
+        BEGIN
+            RAISERROR('MaxHours must be greater than or equal to MinHours.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ----------------------------------------------------------
+        -- INSERT INTO PayrollPolicy
+        ----------------------------------------------------------
+        INSERT INTO PayrollPolicy (effective_date, type, description)
+        VALUES (
+            GETDATE(),
+            'Permission Limits',
+            'Permission limits: MinHours=' + CAST(@MinHours AS VARCHAR(10)) +
+            ', MaxHours=' + CAST(@MaxHours AS VARCHAR(10))
+        );
+
+        DECLARE @NewPolicyID INT = SCOPE_IDENTITY();
+
+        COMMIT TRANSACTION;
+
+        SELECT 
+            @NewPolicyID AS PolicyID,
+            'Permission limits defined successfully' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
+
 END;
 GO
---*************************************************************************************************************
---23) EscalatePendingRequests
+
+-- 23 EscalatePendingRequests
+-- PROCEDURE: EscalatePendingRequests
 CREATE PROCEDURE EscalatePendingRequests
     @Deadline DATETIME
 AS
 BEGIN
-    -- Escalate LeaveRequests
-    UPDATE LeaveRequest
-    SET status = 'Escalated'
-    WHERE status = 'Pending'
-    AND (approval_timing IS NULL OR approval_timing < @Deadline);
-    
-    -- Escalate AttendanceCorrectionRequests
-    UPDATE AttendanceCorrectionRequest
-    SET status = 'Escalated'
-    WHERE status = 'Pending'
-    AND date < @Deadline;
-    
-    -- Escalate Reimbursements
-    UPDATE Reimbursement
-    SET current_status = 'Escalated'
-    WHERE current_status = 'Pending'
-    AND (approval_date IS NULL OR approval_date < @Deadline);
-    
-    SELECT 'Pending requests escalated successfully' AS ConfirmationMessage;
+    SET NOCOUNT ON;
+
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        -------------------------------------------------------
+        -- VALIDATION
+        -------------------------------------------------------
+        IF @Deadline IS NULL
+        BEGIN
+            RAISERROR('Deadline cannot be NULL.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        -------------------------------------------------------
+        -- ESCALATE LEAVE REQUESTS
+        -------------------------------------------------------
+        UPDATE LeaveRequest
+        SET status = 'Escalated'
+        WHERE status = 'Pending'
+          AND (approval_timing IS NULL OR approval_timing < @Deadline);
+
+        DECLARE @EscLeave INT = @@ROWCOUNT;
+
+        -------------------------------------------------------
+        -- ESCALATE ATTENDANCE CORRECTIONS
+        -------------------------------------------------------
+        UPDATE AttendanceCorrectionRequest
+        SET status = 'Escalated'
+        WHERE status = 'Pending'
+          AND [date] < @Deadline;
+
+        DECLARE @EscAttend INT = @@ROWCOUNT;
+
+        -------------------------------------------------------
+        -- ESCALATE REIMBURSEMENT CLAIMS
+        -------------------------------------------------------
+        UPDATE Reimbursement
+        SET current_status = 'Escalated'
+        WHERE current_status = 'Pending'
+          AND (approval_date IS NULL OR approval_date < @Deadline);
+
+        DECLARE @EscReimb INT = @@ROWCOUNT;
+
+        -------------------------------------------------------
+        -- FINAL OUTPUT
+        -------------------------------------------------------
+        COMMIT TRANSACTION;
+
+        SELECT 
+            'Pending requests escalated successfully' AS ConfirmationMessage,
+            @EscLeave AS EscalatedLeaveRequests,
+            @EscAttend AS EscalatedAttendanceCorrections,
+            @EscReimb AS EscalatedReimbursements;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
 END;
 GO
 
---24) LinkVacationToShift
+
+-- 24 LinkVacationToShift
+-- PROCEDURE: LinkVacationToShift
 CREATE PROCEDURE LinkVacationToShift
     @VacationPackageID INT,
     @EmployeeID INT
@@ -1190,69 +1364,162 @@ AS
 BEGIN
     SET NOCOUNT ON;
 
-    DECLARE @LeaveTypeID INT;
+    BEGIN TRY
+        BEGIN TRANSACTION;
 
-    SELECT TOP 1 @LeaveTypeID = leave_id
-    FROM [Leave]
-    WHERE leave_type LIKE '%Vacation%';
+        -----------------------------------------------------------
+        -- 1. Validate Employee Exists
+        -----------------------------------------------------------
+        IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @EmployeeID)
+        BEGIN
+            RAISERROR('Employee does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
 
-    IF EXISTS (
-        SELECT 1 FROM LeaveEntitlement
-        WHERE employee_id = @EmployeeID
-        AND leave_type_id = @LeaveTypeID
-    )
-    BEGIN
-        SELECT 'Vacation already linked.' AS Message;
-        RETURN;
-    END
+        -----------------------------------------------------------
+        -- 2. Get Vacation Leave Type ID
+        -----------------------------------------------------------
+        DECLARE @LeaveTypeID INT;
 
-    INSERT INTO LeaveEntitlement (employee_id, leave_type_id, entitlement)
-    VALUES (@EmployeeID, @LeaveTypeID, 0);
+        SELECT TOP 1 @LeaveTypeID = leave_id
+        FROM [Leave]
+        WHERE leave_type LIKE '%Vacation%';
 
-    SELECT 'Vacation linked successfully.' AS Message;
+        IF @LeaveTypeID IS NULL
+        BEGIN
+            RAISERROR('Vacation leave type does not exist in the system.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        -----------------------------------------------------------
+        -- 3. Create Leave Entitlement if not exists
+        -----------------------------------------------------------
+        IF NOT EXISTS (
+            SELECT 1 FROM LeaveEntitlement
+            WHERE employee_id = @EmployeeID
+              AND leave_type_id = @LeaveTypeID
+        )
+        BEGIN
+            INSERT INTO LeaveEntitlement (employee_id, leave_type_id, entitlement)
+            VALUES (@EmployeeID, @LeaveTypeID, 0);
+        END
+
+        -----------------------------------------------------------
+        -- 4. Link vacation package to employee SHIFTS
+        -- Mark all shift assignments as 'Vacation' for the package
+        -----------------------------------------------------------
+        UPDATE ShiftAssignment
+        SET status = 'Vacation'
+        WHERE employee_id = @EmployeeID;
+
+        -----------------------------------------------------------
+        -- 5. Return Confirmation
+        -----------------------------------------------------------
+        COMMIT TRANSACTION;
+
+        SELECT 'Vacation package linked to employee schedule successfully.' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
+
 END;
 GO
 
 
---25) ConfigureLeavePolicies
+
+-- 25 ConfigureLeavePolicies
+-- PROCEDURE: ConfigureLeavePolicies
 CREATE PROCEDURE ConfigureLeavePolicies
 AS
 BEGIN
-    INSERT INTO LeavePolicy (name, purpose, eligibility_rules, notice_period, special_leave_type, reset_on_new_year)
-    VALUES (
-        'Default Leave Policy',
-        'Standard leave configuration',
-        'All employees eligible',
-        7,
-        'Standard',
-        1
-    );
+    SET NOCOUNT ON;
 
-    SELECT 'Leave policies configured successfully' AS ConfirmationMessage;
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        ------------------------------------------------------
+        -- Check if default leave policy already exists
+        ------------------------------------------------------
+        IF NOT EXISTS (
+            SELECT 1 
+            FROM LeavePolicy 
+            WHERE name = 'Default Leave Policy'
+        )
+        BEGIN
+            INSERT INTO LeavePolicy 
+                (name, purpose, eligibility_rules, notice_period, special_leave_type, reset_on_new_year)
+            VALUES (
+                'Default Leave Policy',
+                'Standard leave configuration',
+                'All employees eligible',
+                7,
+                'Standard',
+                1
+            );
+        END
+
+        COMMIT TRANSACTION;
+
+        SELECT 
+            'Leave policies configured successfully' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
+
 END;
 GO
 
 
---26) AuthenticateLeaveAdmin
+
+-- 26 AuthenticateLeaveAdmin
+-- PROCEDURE: AuthenticateLeaveAdmin
 CREATE PROCEDURE AuthenticateLeaveAdmin
     @AdminID INT,
-    @Password VARCHAR(100)
+    @Password VARCHAR(100)   -- Provided for signature only, not used
 AS
 BEGIN
+    SET NOCOUNT ON;
+
+    -------------------------------------------------------------
+    -- 1. Validate employee exists
+    -------------------------------------------------------------
+    IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @AdminID)
+    BEGIN
+        SELECT 'Authentication failed: Employee does not exist.' AS Message;
+        RETURN;
+    END;
+
+    -------------------------------------------------------------
+    -- 2. Validate employee is an HR Administrator
+    -------------------------------------------------------------
+    IF NOT EXISTS (SELECT 1 FROM HRAdministrator WHERE employee_id = @AdminID)
+    BEGIN
+        SELECT 'Authentication failed: Employee is not an HR Administrator.' AS Message;
+        RETURN;
+    END;
+
+    -------------------------------------------------------------
+    -- 3. Successful authentication (role-based)
+    -------------------------------------------------------------
     SELECT 
         e.employee_id,
         e.full_name,
         hr.approval_level,
-        r.role_name
+        'Administrator authenticated successfully' AS Message
     FROM Employee e
     INNER JOIN HRAdministrator hr ON e.employee_id = hr.employee_id
-    INNER JOIN Employee_Role er ON e.employee_id = er.employee_id
-    INNER JOIN Role r ON er.role_id = r.role_id
     WHERE e.employee_id = @AdminID;
-
-    SELECT 'Administrator authenticated successfully' AS ConfirmationMessage;
 END;
 GO
+
 -- 27 ApplyLeaveConfiguration
 CREATE PROCEDURE ApplyLeaveConfiguration
 AS
@@ -1320,69 +1587,105 @@ BEGIN
     SELECT 'Leave configuration applied successfully' AS ConfirmationMessage;
 END;
 GO
---28. UpdateLeaveEntitlements
+-- 28 UpdateLeaveEntitlements
+-- PROCEDURE: UpdateLeaveEntitlements
 CREATE PROCEDURE UpdateLeaveEntitlements
     @EmployeeID INT
 AS
 BEGIN
-    -- Delete existing entitlements for this employee
-    DELETE FROM LeaveEntitlement
-    WHERE employee_id = @EmployeeID;
+    SET NOCOUNT ON;
 
-    -- Get employee contract type
-    DECLARE @ContractID INT;
-    DECLARE @ContractType VARCHAR(50);
-    
-    SELECT @ContractID = contract_id
-    FROM Employee
-    WHERE employee_id = @EmployeeID;
-    
-    SELECT @ContractType = type
-    FROM Contract
-    WHERE contract_id = @ContractID;
+    BEGIN TRY
+        BEGIN TRANSACTION;
 
-    -- Apply vacation leave based on contract type
-    IF @ContractType = 'Full-Time'
-    BEGIN
-        INSERT INTO LeaveEntitlement (employee_id, leave_type_id, entitlement)
-        SELECT @EmployeeID, leave_id, 21.00
-        FROM VacationLeave;
-    END
-    ELSE IF @ContractType = 'Part-Time'
-    BEGIN
-        INSERT INTO LeaveEntitlement (employee_id, leave_type_id, entitlement)
-        SELECT @EmployeeID, leave_id, 10.00
-        FROM VacationLeave;
-    END;
+        ------------------------------------------------------------
+        -- Validate employee exists
+        ------------------------------------------------------------
+        IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @EmployeeID)
+        BEGIN
+            RAISERROR('Employee does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
 
-    -- Apply sick leave based on contract type
-    IF @ContractType = 'Full-Time' OR @ContractType = 'Part-Time'
-    BEGIN
-        INSERT INTO LeaveEntitlement (employee_id, leave_type_id, entitlement)
-        SELECT @EmployeeID, leave_id, 10.00
-        FROM SickLeave;
-    END;
+        ------------------------------------------------------------
+        -- Get employee contract type safely
+        ------------------------------------------------------------
+        DECLARE @ContractType VARCHAR(50);
 
-    -- Apply probation leave for new employees
-    IF EXISTS (
-        SELECT 1 FROM Employee 
-        WHERE employee_id = @EmployeeID 
-        AND DATEDIFF(MONTH, hire_date, GETDATE()) <= 6
-    )
-    BEGIN
-        INSERT INTO LeaveEntitlement (employee_id, leave_type_id, entitlement)
-        SELECT @EmployeeID, leave_id, 5.00
-        FROM ProbationLeave;
-    END;
+        SELECT @ContractType = c.type
+        FROM Employee e
+        LEFT JOIN Contract c ON e.contract_id = c.contract_id
+        WHERE e.employee_id = @EmployeeID;
 
-    -- Apply holiday leave for all
-    INSERT INTO LeaveEntitlement (employee_id, leave_type_id, entitlement)
-    SELECT @EmployeeID, leave_id, 0.00
-    FROM HolidayLeave;
+        ------------------------------------------------------------
+        -- Remove existing entitlements
+        ------------------------------------------------------------
+        DELETE FROM LeaveEntitlement
+        WHERE employee_id = @EmployeeID;
 
-    SELECT 'Leave entitlements updated successfully' AS ConfirmationMessage;
+        ------------------------------------------------------------
+        -- VACATION: FullTime = 21 days, PartTime = 10 days
+        ------------------------------------------------------------
+        IF @ContractType = 'FullTime'
+        BEGIN
+            INSERT INTO LeaveEntitlement (employee_id, leave_type_id, entitlement)
+            SELECT @EmployeeID, leave_id, 21
+            FROM VacationLeave;
+        END
+        ELSE IF @ContractType = 'PartTime'
+        BEGIN
+            INSERT INTO LeaveEntitlement (employee_id, leave_type_id, entitlement)
+            SELECT @EmployeeID, leave_id, 10
+            FROM VacationLeave;
+        END
+
+        ------------------------------------------------------------
+        -- SICK: FullTime or PartTime → 10 days
+        ------------------------------------------------------------
+        IF @ContractType IN ('FullTime', 'PartTime')
+        BEGIN
+            INSERT INTO LeaveEntitlement (employee_id, leave_type_id, entitlement)
+            SELECT @EmployeeID, leave_id, 10
+            FROM SickLeave;
+        END
+
+        ------------------------------------------------------------
+        -- PROBATION: employees hired within last 6 months
+        ------------------------------------------------------------
+        IF EXISTS (
+            SELECT 1 FROM Employee 
+            WHERE employee_id = @EmployeeID
+              AND DATEDIFF(MONTH, hire_date, GETDATE()) <= 6
+        )
+        BEGIN
+            INSERT INTO LeaveEntitlement (employee_id, leave_type_id, entitlement)
+            SELECT @EmployeeID, leave_id, 5
+            FROM ProbationLeave;
+        END
+
+        ------------------------------------------------------------
+        -- HOLIDAY: Everybody → 0 days
+        ------------------------------------------------------------
+        IF EXISTS (SELECT 1 FROM HolidayLeave)
+        BEGIN
+            INSERT INTO LeaveEntitlement (employee_id, leave_type_id, entitlement)
+            SELECT @EmployeeID, leave_id, 0
+            FROM HolidayLeave;
+        END
+
+        COMMIT TRANSACTION;
+
+        SELECT 'Leave entitlements updated successfully' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
 END;
 GO
+
 
 --29 ConfigureLeaveEligibility
 CREATE PROCEDURE ConfigureLeaveEligibility
@@ -1404,21 +1707,53 @@ BEGIN
     SELECT 'Leave eligibility configured successfully' AS ConfirmationMessage;
 END;
 GO
---30 ManageLeaveTypes
+-- 30 ManageLeaveTypes
+-- PROCEDURE: ManageLeaveTypes
 CREATE PROCEDURE ManageLeaveTypes
     @LeaveType VARCHAR(50),
     @Description VARCHAR(200)
 AS
 BEGIN
-    INSERT INTO Leave (leave_type, leave_description)
-    VALUES (
-        @LeaveType,
-        @Description
-    );
+    SET NOCOUNT ON;
 
-    SELECT 'Leave type managed successfully' AS ConfirmationMessage;
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        ------------------------------------------------------
+        -- 1. Check if leave type already exists
+        ------------------------------------------------------
+        IF EXISTS (SELECT 1 FROM [Leave] WHERE leave_type = @LeaveType)
+        BEGIN
+            -- Update existing leave description
+            UPDATE [Leave]
+            SET leave_description = @Description
+            WHERE leave_type = @LeaveType;
+
+            COMMIT TRANSACTION;
+
+            SELECT 'Leave type updated successfully' AS ConfirmationMessage;
+            RETURN;
+        END
+
+        ------------------------------------------------------
+        -- 2. Insert new leave type
+        ------------------------------------------------------
+        INSERT INTO [Leave] (leave_type, leave_description)
+        VALUES (@LeaveType, @Description);
+
+        COMMIT TRANSACTION;
+
+        SELECT 'New leave type created successfully' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        SELECT 'Error: Leave type could not be created or updated.' AS ConfirmationMessage;
+    END CATCH
+
 END;
 GO
+
 
 
 --31 AssignLeaveEntitlement

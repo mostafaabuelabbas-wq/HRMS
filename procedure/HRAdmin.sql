@@ -1756,7 +1756,8 @@ GO
 
 
 
---31 AssignLeaveEntitlement
+-- 31 AssignLeaveEntitlement
+-- PROCEDURE: AssignLeaveEntitlement
 CREATE PROCEDURE AssignLeaveEntitlement
     @EmployeeID INT,
     @LeaveType VARCHAR(50),
@@ -1765,31 +1766,71 @@ AS
 BEGIN
     SET NOCOUNT ON;
 
-    DECLARE @LeaveTypeID INT;
-    SELECT @LeaveTypeID = leave_id FROM [Leave] WHERE leave_type = @LeaveType;
+    BEGIN TRY
+        BEGIN TRANSACTION;
 
-    IF EXISTS (
-        SELECT 1 FROM LeaveEntitlement
-        WHERE employee_id = @EmployeeID AND leave_type_id = @LeaveTypeID
-    )
-    BEGIN
-        UPDATE LeaveEntitlement
-        SET entitlement = @Entitlement
-        WHERE employee_id = @EmployeeID AND leave_type_id = @LeaveTypeID;
+        ----------------------------------------------------
+        -- 1. Validate employee exists
+        ----------------------------------------------------
+        IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @EmployeeID)
+        BEGIN
+            RAISERROR('Employee does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
 
-        SELECT 'Entitlement updated.' AS Message;
-        RETURN;
-    END
+        ----------------------------------------------------
+        -- 2. Validate leave type exists
+        ----------------------------------------------------
+        DECLARE @LeaveTypeID INT;
+        SELECT @LeaveTypeID = leave_id FROM [Leave] WHERE leave_type = @LeaveType;
 
-    INSERT INTO LeaveEntitlement (employee_id, leave_type_id, entitlement)
-    VALUES (@EmployeeID, @LeaveTypeID, @Entitlement);
+        IF @LeaveTypeID IS NULL
+        BEGIN
+            RAISERROR('Invalid leave type.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
 
-    SELECT 'Entitlement assigned.' AS Message;
+        ----------------------------------------------------
+        -- 3. Update if entitlement exists
+        ----------------------------------------------------
+        IF EXISTS (
+            SELECT 1 FROM LeaveEntitlement
+            WHERE employee_id = @EmployeeID AND leave_type_id = @LeaveTypeID
+        )
+        BEGIN
+            UPDATE LeaveEntitlement
+            SET entitlement = @Entitlement
+            WHERE employee_id = @EmployeeID AND leave_type_id = @LeaveTypeID;
+
+            COMMIT TRANSACTION;
+
+            SELECT 'Entitlement updated successfully.' AS ConfirmationMessage;
+            RETURN;
+        END;
+
+        ----------------------------------------------------
+        -- 4. Insert new entitlement
+        ----------------------------------------------------
+        INSERT INTO LeaveEntitlement (employee_id, leave_type_id, entitlement)
+        VALUES (@EmployeeID, @LeaveTypeID, @Entitlement);
+
+        COMMIT TRANSACTION;
+
+        SELECT 'Entitlement assigned successfully.' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
 END;
 GO
 
 
---32 ConfigureLeaveRules
+-- 32 ConfigureLeaveRules
+-- PROCEDURE: ConfigureLeaveRules
 CREATE PROCEDURE ConfigureLeaveRules
     @LeaveType VARCHAR(50),
     @MaxDuration INT,
@@ -1797,282 +1838,889 @@ CREATE PROCEDURE ConfigureLeaveRules
     @WorkflowType VARCHAR(50)
 AS
 BEGIN
-    INSERT INTO LeavePolicy (name, purpose, eligibility_rules, notice_period, special_leave_type, reset_on_new_year)
-    VALUES (
-        @LeaveType + ' Rules',
-        'Leave rules configuration for ' + @LeaveType,
-        'MaxDuration=' + CAST(@MaxDuration AS VARCHAR(10)) + ';WorkflowType=' + @WorkflowType,
-        @NoticePeriod,
-        @LeaveType,
-        1
-    );
+    SET NOCOUNT ON;
 
-    SELECT 'Leave rules configured successfully' AS ConfirmationMessage;
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        ----------------------------------------------------
+        -- 1. Validate that LeaveType exists
+        ----------------------------------------------------
+        IF NOT EXISTS (SELECT 1 FROM [Leave] WHERE leave_type = @LeaveType)
+        BEGIN
+            RAISERROR('Leave type does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ----------------------------------------------------
+        -- 2. Prevent duplicate rule creation
+        ----------------------------------------------------
+        IF EXISTS (
+            SELECT 1 FROM LeavePolicy
+            WHERE special_leave_type = @LeaveType
+              AND purpose LIKE 'Leave rules configuration%'
+        )
+        BEGIN
+            RAISERROR('Rules for this leave type already exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ----------------------------------------------------
+        -- 3. Insert new rule
+        ----------------------------------------------------
+        INSERT INTO LeavePolicy
+            (name, purpose, eligibility_rules, notice_period, special_leave_type, reset_on_new_year)
+        VALUES (
+            @LeaveType + ' Rules',
+            'Leave rules configuration for ' + @LeaveType,
+            'MaxDuration=' + CAST(@MaxDuration AS VARCHAR(10)) +
+                ';WorkflowType=' + @WorkflowType,
+            @NoticePeriod,
+            @LeaveType,
+            1
+        );
+
+        COMMIT TRANSACTION;
+
+        SELECT 'Leave rules configured successfully' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
 END;
 GO
---33. ConfigureSpecialLeave
+
+-- 33 ConfigureSpecialLeave
+-- PROCEDURE: ConfigureSpecialLeave
 CREATE PROCEDURE ConfigureSpecialLeave
     @LeaveType VARCHAR(50),
     @Rules VARCHAR(200)
 AS
 BEGIN
-    INSERT INTO LeavePolicy (name, purpose, eligibility_rules, notice_period, special_leave_type, reset_on_new_year)
-    VALUES (
-        @LeaveType + ' Policy',
-        'Special leave policy for ' + @LeaveType,
-        @Rules,
-        0,
-        @LeaveType,
-        0
-    );
+    SET NOCOUNT ON;
 
-    SELECT 'Special leave configured successfully' AS ConfirmationMessage;
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        -------------------------------------------------------
+        -- 1. Validate leave type exists
+        -------------------------------------------------------
+        IF NOT EXISTS (SELECT 1 FROM [Leave] WHERE leave_type = @LeaveType)
+        BEGIN
+            RAISERROR('Leave type does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        -------------------------------------------------------
+        -- 2. Prevent duplicate special-leave policy creation
+        -------------------------------------------------------
+        IF EXISTS (
+            SELECT 1 FROM LeavePolicy
+            WHERE special_leave_type = @LeaveType
+              AND purpose LIKE 'Special leave policy%'
+        )
+        BEGIN
+            RAISERROR('A special leave policy for this type already exists.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        -------------------------------------------------------
+        -- 3. Insert special leave policy
+        -------------------------------------------------------
+        INSERT INTO LeavePolicy
+            (name, purpose, eligibility_rules, notice_period, special_leave_type, reset_on_new_year)
+        VALUES (
+            @LeaveType + ' Policy',
+            'Special leave policy for ' + @LeaveType,
+            @Rules,
+            0,            -- special leaves have no notice period
+            @LeaveType,
+            0             -- does NOT reset yearly
+        );
+
+        COMMIT TRANSACTION;
+
+        SELECT 'Special leave configured successfully' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
+
 END;
 GO
 
---34 SetLeaveYearRules
+
+-- 34 SetLeaveYearRules
+-- PROCEDURE: SetLeaveYearRules
 CREATE PROCEDURE SetLeaveYearRules
     @StartDate DATE,
     @EndDate DATE
 AS
 BEGIN
-    INSERT INTO LeavePolicy (name, purpose, eligibility_rules, notice_period, special_leave_type, reset_on_new_year)
-    VALUES (
-        'Leave Year Configuration',
-        'Defines the legal leave year period and reset rules',
-        'StartDate=' + CAST(@StartDate AS VARCHAR(20)) + ';EndDate=' + CAST(@EndDate AS VARCHAR(20)),
-        0,
-        'Annual Reset',
-        1
-    );
+    SET NOCOUNT ON;
 
-    SELECT 'Leave year rules set successfully' AS ConfirmationMessage;
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        ------------------------------------------------------
+        -- 1. Validate Date Range
+        ------------------------------------------------------
+        IF @StartDate >= @EndDate
+        BEGIN
+            RAISERROR('Start date must be earlier than end date.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ------------------------------------------------------
+        -- 2. Prevent duplicate leave-year configuration
+        ------------------------------------------------------
+        IF EXISTS (
+            SELECT 1 FROM LeavePolicy
+            WHERE name = 'Leave Year Configuration'
+        )
+        BEGIN
+            RAISERROR('Leave year rules already exist. Update not allowed.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ------------------------------------------------------
+        -- 3. Insert the leave-year configuration
+        ------------------------------------------------------
+        INSERT INTO LeavePolicy
+            (name, purpose, eligibility_rules, notice_period, special_leave_type, reset_on_new_year)
+        VALUES (
+            'Leave Year Configuration',
+            'Defines the legal leave year period and reset rules',
+            'StartDate=' + CAST(@StartDate AS VARCHAR(20)) + ';EndDate=' + CAST(@EndDate AS VARCHAR(20)),
+            0,
+            'Annual Reset',
+            1
+        );
+
+        COMMIT TRANSACTION;
+
+        SELECT 'Leave year rules set successfully' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
 END;
 GO
 
---35 AdjustLeaveBalance
+
+-- 35 AdjustLeaveBalance
+-- PROCEDURE: AdjustLeaveBalance
 CREATE PROCEDURE AdjustLeaveBalance
     @EmployeeID INT,
     @LeaveType VARCHAR(50),
     @Adjustment DECIMAL(5,2)
 AS
 BEGIN
-    DECLARE @LeaveTypeID INT;
-    
-    SELECT @LeaveTypeID = leave_id
-    FROM Leave
-    WHERE leave_type = @LeaveType;
-    
-    UPDATE LeaveEntitlement
-    SET entitlement = entitlement + @Adjustment
-    WHERE employee_id = @EmployeeID
-    AND leave_type_id = @LeaveTypeID;
+    SET NOCOUNT ON;
 
-    SELECT 'Leave balance adjusted successfully' AS ConfirmationMessage;
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        --------------------------------------------------------
+        -- Validate employee exists
+        --------------------------------------------------------
+        IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @EmployeeID)
+        BEGIN
+            RAISERROR('Employee does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        --------------------------------------------------------
+        -- Validate leave type exists
+        --------------------------------------------------------
+        DECLARE @LeaveTypeID INT;
+        SELECT @LeaveTypeID = leave_id FROM [Leave] WHERE leave_type = @LeaveType;
+
+        IF @LeaveTypeID IS NULL
+        BEGIN
+            RAISERROR('Invalid leave type.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        --------------------------------------------------------
+        -- Validate entitlement exists
+        --------------------------------------------------------
+        IF NOT EXISTS (
+            SELECT 1 FROM LeaveEntitlement
+            WHERE employee_id = @EmployeeID
+              AND leave_type_id = @LeaveTypeID
+        )
+        BEGIN
+            RAISERROR('Employee does not have this leave entitlement.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        --------------------------------------------------------
+        -- Apply the adjustment
+        --------------------------------------------------------
+        UPDATE LeaveEntitlement
+        SET entitlement = entitlement + @Adjustment
+        WHERE employee_id = @EmployeeID
+          AND leave_type_id = @LeaveTypeID;
+
+        COMMIT TRANSACTION;
+
+        SELECT 'Leave balance adjusted successfully.' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
 END;
 GO
 
 
---36 ManageLeaveRoles
+
+-- 36 ManageLeaveRoles
+-- PROCEDURE: ManageLeaveRoles
 CREATE PROCEDURE ManageLeaveRoles
     @RoleID INT,
     @Permissions VARCHAR(200)
 AS
 BEGIN
-    INSERT INTO RolePermission (role_id, permission_name, allowed_action)
-    VALUES (
-        @RoleID,
-        'Leave Management',
-        @Permissions
-    );
+    SET NOCOUNT ON;
 
-    SELECT 'Leave role permissions managed successfully' AS ConfirmationMessage;
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        ----------------------------------------------------
+        -- 1. Validate role exists
+        ----------------------------------------------------
+        IF NOT EXISTS (SELECT 1 FROM Role WHERE role_id = @RoleID)
+        BEGIN
+            RAISERROR('Role does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ----------------------------------------------------
+        -- 2. Check if permission already exists
+        ----------------------------------------------------
+        IF EXISTS (
+            SELECT 1 FROM RolePermission
+            WHERE role_id = @RoleID
+              AND permission_name = 'Leave Management'
+        )
+        BEGIN
+            -- Update existing permission
+            UPDATE RolePermission
+            SET allowed_action = @Permissions
+            WHERE role_id = @RoleID
+              AND permission_name = 'Leave Management';
+
+            COMMIT TRANSACTION;
+            SELECT 'Leave role permissions updated successfully' AS ConfirmationMessage;
+            RETURN;
+        END;
+
+        ----------------------------------------------------
+        -- 3. Insert new permission
+        ----------------------------------------------------
+        INSERT INTO RolePermission (role_id, permission_name, allowed_action)
+        VALUES (@RoleID, 'Leave Management', @Permissions);
+
+        COMMIT TRANSACTION;
+
+        SELECT 'Leave role permissions created successfully' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
+
 END;
 GO
---37 FinalizeLeaveRequest
+
+-- 37 FinalizeLeaveRequest
+-- PROCEDURE: FinalizeLeaveRequest
 CREATE PROCEDURE FinalizeLeaveRequest
     @LeaveRequestID INT
 AS
 BEGIN
-    DECLARE @EmployeeID INT;
-    DECLARE @LeaveTypeID INT;
-    DECLARE @Duration DECIMAL(5,2);
-    
-    SELECT 
-        @EmployeeID = employee_id,
-        @LeaveTypeID = leave_id,
-        @Duration = duration
-    FROM LeaveRequest
-    WHERE request_id = @LeaveRequestID;
-    
-    UPDATE LeaveRequest
-    SET status = 'Finalized'
-    WHERE request_id = @LeaveRequestID;
-    
-    UPDATE LeaveEntitlement
-    SET entitlement = entitlement - @Duration
-    WHERE employee_id = @EmployeeID
-    AND leave_type_id = @LeaveTypeID;
+    SET NOCOUNT ON;
 
-    SELECT 'Leave request finalized successfully' AS ConfirmationMessage;
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        ---------------------------------------------------------
+        -- 1. Validate leave request exists and is approved
+        ---------------------------------------------------------
+        DECLARE @EmployeeID INT;
+        DECLARE @LeaveTypeID INT;
+        DECLARE @Duration DECIMAL(5,2);
+        DECLARE @Status VARCHAR(50);
+
+        SELECT 
+            @EmployeeID = employee_id,
+            @LeaveTypeID = leave_id,
+            @Duration = duration,
+            @Status = status
+        FROM LeaveRequest
+        WHERE request_id = @LeaveRequestID;
+
+        IF @EmployeeID IS NULL
+        BEGIN
+            RAISERROR('Leave request does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        IF @Status <> 'Approved'
+        BEGIN
+            RAISERROR('Only approved requests can be finalized.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ---------------------------------------------------------
+        -- 2. Validate entitlement exists
+        ---------------------------------------------------------
+        IF NOT EXISTS (
+            SELECT 1 FROM LeaveEntitlement
+            WHERE employee_id = @EmployeeID
+              AND leave_type_id = @LeaveTypeID
+        )
+        BEGIN
+            RAISERROR('Employee does not have this leave entitlement.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ---------------------------------------------------------
+        -- 3. Validate leave balance is enough
+        ---------------------------------------------------------
+        IF (SELECT entitlement FROM LeaveEntitlement 
+            WHERE employee_id = @EmployeeID 
+              AND leave_type_id = @LeaveTypeID) < @Duration
+        BEGIN
+            RAISERROR('Insufficient leave balance.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ---------------------------------------------------------
+        -- 4. Finalize request
+        ---------------------------------------------------------
+        UPDATE LeaveRequest
+        SET status = 'Finalized'
+        WHERE request_id = @LeaveRequestID;
+
+        ---------------------------------------------------------
+        -- 5. Deduct entitlement
+        ---------------------------------------------------------
+        UPDATE LeaveEntitlement
+        SET entitlement = entitlement - @Duration
+        WHERE employee_id = @EmployeeID
+          AND leave_type_id = @LeaveTypeID;
+
+        COMMIT TRANSACTION;
+
+        SELECT 'Leave request finalized successfully.' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
+
 END;
 GO
---38 OverrideLeaveDecision
+
+-- 38 OverrideLeaveDecision
+-- PROCEDURE: OverrideLeaveDecision
 CREATE PROCEDURE OverrideLeaveDecision
     @LeaveRequestID INT,
     @Reason VARCHAR(200)
 AS
 BEGIN
-    DECLARE @CurrentStatus VARCHAR(50);
-    
-    SELECT @CurrentStatus = status
-    FROM LeaveRequest
-    WHERE request_id = @LeaveRequestID;
-    
-    IF @CurrentStatus = 'Rejected'
-    BEGIN
-        UPDATE LeaveRequest
-        SET status = 'Approved - Override',
-            justification = justification + ' | Override Reason: ' + @Reason
-        WHERE request_id = @LeaveRequestID;
-    END
-    ELSE IF @CurrentStatus = 'Approved'
-    BEGIN
-        UPDATE LeaveRequest
-        SET status = 'Rejected - Override',
-            justification = justification + ' | Override Reason: ' + @Reason
-        WHERE request_id = @LeaveRequestID;
-    END;
+    SET NOCOUNT ON;
 
-    SELECT 'Leave decision overridden successfully' AS ConfirmationMessage;
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        --------------------------------------------------------
+        -- 1. Validate request exists and retrieve required fields
+        --------------------------------------------------------
+        DECLARE @CurrentStatus VARCHAR(50);
+        DECLARE @Justification VARCHAR(MAX);
+
+        SELECT 
+            @CurrentStatus = status,
+            @Justification = justification
+        FROM LeaveRequest
+        WHERE request_id = @LeaveRequestID;
+
+        IF @CurrentStatus IS NULL
+        BEGIN
+            RAISERROR('Leave request does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        --------------------------------------------------------
+        -- 2. Only approved or rejected requests may be overridden
+        --------------------------------------------------------
+        IF @CurrentStatus NOT IN ('Approved', 'Rejected')
+        BEGIN
+            RAISERROR('Only Approved or Rejected requests can be overridden.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        --------------------------------------------------------
+        -- 3. Ensure justification is not NULL
+        --------------------------------------------------------
+        SET @Justification = ISNULL(@Justification, '');
+
+        --------------------------------------------------------
+        -- 4. Perform the override logic
+        --------------------------------------------------------
+        IF @CurrentStatus = 'Rejected'
+        BEGIN
+            UPDATE LeaveRequest
+            SET status = 'Approved - Override',
+                justification = @Justification + ' | Override Reason: ' + @Reason
+            WHERE request_id = @LeaveRequestID;
+        END
+        ELSE IF @CurrentStatus = 'Approved'
+        BEGIN
+            UPDATE LeaveRequest
+            SET status = 'Rejected - Override',
+                justification = @Justification + ' | Override Reason: ' + @Reason
+            WHERE request_id = @LeaveRequestID;
+        END;
+
+        COMMIT TRANSACTION;
+
+        SELECT 'Leave decision overridden successfully.' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
+
 END;
 GO
---39 BulkProcessLeaveRequests
+
+-- 39 BulkProcessLeaveRequests
+-- PROCEDURE: BulkProcessLeaveRequests
 CREATE PROCEDURE BulkProcessLeaveRequests
     @LeaveRequestIDs VARCHAR(500)
 AS
 BEGIN
-    UPDATE LeaveRequest
-    SET status = 'Approved'
-    WHERE request_id IN (SELECT value FROM STRING_SPLIT(@LeaveRequestIDs, ','));
+    SET NOCOUNT ON;
 
-    SELECT 'Leave requests processed successfully' AS ConfirmationMessage;
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        --------------------------------------------------------
+        -- 1. Parse IDs safely
+        --------------------------------------------------------
+        IF @LeaveRequestIDs IS NULL OR LTRIM(RTRIM(@LeaveRequestIDs)) = ''
+        BEGIN
+            RAISERROR('No LeaveRequest IDs were provided.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        --------------------------------------------------------
+        -- 2. Only approve requests that exist AND are still pending
+        --------------------------------------------------------
+        UPDATE LeaveRequest
+        SET status = 'Approved',
+            approval_timing = GETDATE()
+        WHERE request_id IN (SELECT TRY_CAST(value AS INT) FROM STRING_SPLIT(@LeaveRequestIDs, ','))
+          AND status = 'Pending';
+
+        --------------------------------------------------------
+        -- 3. Return number of affected rows
+        --------------------------------------------------------
+        DECLARE @Count INT = @@ROWCOUNT;
+
+        COMMIT TRANSACTION;
+
+        SELECT 
+            @Count AS ProcessedRequests,
+            'Leave requests processed successfully.' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
 END;
 GO
--- 40. VerifyMedicalLeave
+
+-- 40 VerifyMedicalLeave
+-- PROCEDURE: VerifyMedicalLeave
 CREATE PROCEDURE VerifyMedicalLeave
     @LeaveRequestID INT,
     @DocumentID INT
 AS
 BEGIN
-    UPDATE LeaveDocument
-    SET file_path = file_path + ' | Verified'
-    WHERE document_id = @DocumentID
-    AND leave_request_id = @LeaveRequestID;
-    
-    UPDATE LeaveRequest
-    SET status = 'Approved - Document Verified'
-    WHERE request_id = @LeaveRequestID;
+    SET NOCOUNT ON;
 
-    SELECT 'Medical leave document verified successfully' AS ConfirmationMessage;
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        ---------------------------------------------------------
+        -- 1. Validate leave request exists AND is sick leave
+        ---------------------------------------------------------
+        DECLARE @LeaveType VARCHAR(50);
+
+        SELECT @LeaveType = L.leave_type
+        FROM LeaveRequest LR
+        JOIN [Leave] L ON LR.leave_id = L.leave_id
+        WHERE LR.request_id = @LeaveRequestID;
+
+        IF @LeaveType IS NULL
+        BEGIN
+            RAISERROR('Leave request does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        IF @LeaveType <> 'Sick'
+        BEGIN
+            RAISERROR('Medical verification only applies to Sick Leave.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ---------------------------------------------------------
+        -- 2. Validate document exists and is linked to this request
+        ---------------------------------------------------------
+        IF NOT EXISTS (
+            SELECT 1 FROM LeaveDocument
+            WHERE document_id = @DocumentID
+              AND leave_request_id = @LeaveRequestID
+        )
+        BEGIN
+            RAISERROR('Document does not match this leave request.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ---------------------------------------------------------
+        -- 3. Mark the document as verified
+        ---------------------------------------------------------
+        UPDATE LeaveDocument
+        SET file_path = ISNULL(file_path, '') + ' | Verified'
+        WHERE document_id = @DocumentID;
+
+        ---------------------------------------------------------
+        -- 4. Update leave request status
+        ---------------------------------------------------------
+        UPDATE LeaveRequest
+        SET status = 'Approved - Document Verified',
+            approval_timing = GETDATE()
+        WHERE request_id = @LeaveRequestID;
+
+        COMMIT TRANSACTION;
+
+        SELECT 'Medical leave document verified successfully.' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
 END;
 GO
---41 SyncLeaveBalances
+
+-- 41 SyncLeaveBalances
+-- PROCEDURE: SyncLeaveBalances
 CREATE PROCEDURE SyncLeaveBalances
     @LeaveRequestID INT
 AS
 BEGIN
-    DECLARE @EmployeeID INT;
-    DECLARE @LeaveTypeID INT;
-    DECLARE @Duration DECIMAL(5,2);
-    
-    SELECT 
-        @EmployeeID = employee_id,
-        @LeaveTypeID = leave_id,
-        @Duration = duration
-    FROM LeaveRequest
-    WHERE request_id = @LeaveRequestID;
-    
-    UPDATE LeaveEntitlement
-    SET entitlement = entitlement - @Duration
-    WHERE employee_id = @EmployeeID
-    AND leave_type_id = @LeaveTypeID;
-    
-    UPDATE LeaveRequest
-    SET status = 'Approved - Balance Updated'
-    WHERE request_id = @LeaveRequestID;
+    SET NOCOUNT ON;
 
-    SELECT 'Leave balances synced successfully' AS ConfirmationMessage;
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        ---------------------------------------------------------
+        -- 1. Validate leave request exists and is approved/finalized
+        ---------------------------------------------------------
+        DECLARE @EmployeeID INT;
+        DECLARE @LeaveTypeID INT;
+        DECLARE @Duration DECIMAL(5,2);
+        DECLARE @Status VARCHAR(50);
+
+        SELECT 
+            @EmployeeID = employee_id,
+            @LeaveTypeID = leave_id,
+            @Duration = duration,
+            @Status = status
+        FROM LeaveRequest
+        WHERE request_id = @LeaveRequestID;
+
+        IF @EmployeeID IS NULL
+        BEGIN
+            RAISERROR('Leave request does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        IF @Status NOT IN ('Approved', 'Finalized', 'Approved - Document Verified')
+        BEGIN
+            RAISERROR('Leave balance can only be synced after approval.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ---------------------------------------------------------
+        -- 2. Prevent double deduction
+        ---------------------------------------------------------
+        IF @Status = 'Approved - Balance Updated'
+        BEGIN
+            RAISERROR('Leave balance already synced for this request.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ---------------------------------------------------------
+        -- 3. Validate entitlement exists and sufficient balance
+        ---------------------------------------------------------
+        IF NOT EXISTS (
+            SELECT 1 FROM LeaveEntitlement
+            WHERE employee_id = @EmployeeID
+              AND leave_type_id = @LeaveTypeID
+        )
+        BEGIN
+            RAISERROR('Employee does not have this leave entitlement.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        IF (SELECT entitlement FROM LeaveEntitlement
+            WHERE employee_id = @EmployeeID
+              AND leave_type_id = @LeaveTypeID) < @Duration
+        BEGIN
+            RAISERROR('Insufficient leave balance.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ---------------------------------------------------------
+        -- 4. Deduct balance
+        ---------------------------------------------------------
+        UPDATE LeaveEntitlement
+        SET entitlement = entitlement - @Duration
+        WHERE employee_id = @EmployeeID
+          AND leave_type_id = @LeaveTypeID;
+
+        ---------------------------------------------------------
+        -- 5. Update request status
+        ---------------------------------------------------------
+        UPDATE LeaveRequest
+        SET status = 'Approved - Balance Updated'
+        WHERE request_id = @LeaveRequestID;
+
+        COMMIT TRANSACTION;
+
+        SELECT 'Leave balances synced successfully' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
 END;
 GO
---42 ProcessLeaveCarryForward
+
+-- 42 ProcessLeaveCarryForward
+-- PROCEDURE: ProcessLeaveCarryForward
 CREATE PROCEDURE ProcessLeaveCarryForward
     @Year INT
 AS
 BEGIN
-    UPDATE le
-    SET le.entitlement = 
-        CASE 
-            -- If leave policy says reset on new year = 0 (don't reset), keep full balance
-            WHEN lp.reset_on_new_year = 0 THEN le.entitlement
-            
-            -- If it's vacation leave with carry-over rules, apply carry-over limit
-            WHEN vl.carry_over_days IS NOT NULL AND le.entitlement > vl.carry_over_days 
-            THEN vl.carry_over_days
-            
-            -- If it's vacation leave with carry-over and balance is less than limit, keep it
-            WHEN vl.carry_over_days IS NOT NULL 
-            THEN le.entitlement
-            
-            -- If leave policy says reset on new year = 1, reset to 0
-            WHEN lp.reset_on_new_year = 1 THEN 0
-            
-            -- Default: keep current balance
-            ELSE le.entitlement
-        END
-    FROM LeaveEntitlement le
-    INNER JOIN Leave l ON le.leave_type_id = l.leave_id
-    LEFT JOIN VacationLeave vl ON l.leave_id = vl.leave_id
-    LEFT JOIN LeavePolicy lp ON l.leave_type = lp.special_leave_type;
+    SET NOCOUNT ON;
 
-    SELECT 'Leave carry-forward processed for year ' + CAST(@Year AS VARCHAR(10)) + ' successfully' AS ConfirmationMessage;
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        ---------------------------------------------------------
+        -- 1. Validate that leave policies exist
+        ---------------------------------------------------------
+        IF NOT EXISTS (SELECT 1 FROM LeavePolicy)
+        BEGIN
+            RAISERROR('Leave policies are not configured.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ---------------------------------------------------------
+        -- 2. Process carry-forward using policy + vacation rules
+        ---------------------------------------------------------
+        UPDATE le
+        SET le.entitlement =
+            CASE
+                -------------------------------------------------------------------
+                -- Case A: Leave type does not reset (reset_on_new_year = 0)
+                -------------------------------------------------------------------
+                WHEN lp.reset_on_new_year = 0 THEN le.entitlement
+
+                -------------------------------------------------------------------
+                -- Case B: Vacation leave with carry-over limit
+                -------------------------------------------------------------------
+                WHEN vl.carry_over_days IS NOT NULL AND le.entitlement > vl.carry_over_days
+                    THEN vl.carry_over_days
+
+                WHEN vl.carry_over_days IS NOT NULL
+                    THEN le.entitlement
+
+                -------------------------------------------------------------------
+                -- Case C: Leave types that reset (reset_on_new_year = 1)
+                -------------------------------------------------------------------
+                WHEN lp.reset_on_new_year = 1 THEN 0
+
+                -------------------------------------------------------------------
+                -- Default: keep the same balance
+                -------------------------------------------------------------------
+                ELSE le.entitlement
+            END
+        FROM LeaveEntitlement le
+        JOIN [Leave] l ON le.leave_type_id = l.leave_id
+        LEFT JOIN VacationLeave vl ON l.leave_id = vl.leave_id
+        LEFT JOIN LeavePolicy lp ON lp.special_leave_type = l.leave_type;
+
+        ---------------------------------------------------------
+        -- 3. Return confirmation
+        ---------------------------------------------------------
+        SELECT
+            'Leave carry-forward processed for year ' 
+            + CAST(@Year AS VARCHAR(10)) 
+            + ' successfully' AS ConfirmationMessage;
+
+        COMMIT TRANSACTION;
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
+
 END;
 GO
---43 SyncLeaveToAttendance
+
+-- 43 SyncLeaveToAttendance
+-- PROCEDURE: SyncLeaveToAttendance
 CREATE PROCEDURE SyncLeaveToAttendance
     @LeaveRequestID INT
 AS
 BEGIN
-    DECLARE @EmployeeID INT;
-    DECLARE @LeaveType VARCHAR(50);
-    DECLARE @Duration INT;
-    
-    SELECT 
-        @EmployeeID = lr.employee_id,
-        @LeaveType = l.leave_type,
-        @Duration = lr.duration
-    FROM LeaveRequest lr
-    INNER JOIN Leave l ON lr.leave_id = l.leave_id
-    WHERE lr.request_id = @LeaveRequestID;
-    
-    INSERT INTO Exception (name, category, date, status)
-    VALUES (
-        @LeaveType + ' Leave',
-        'Leave',
-        GETDATE(),
-        'Active'
-    );
-    
-    INSERT INTO Employee_Exception (employee_id, exception_id)
-    VALUES (
-        @EmployeeID,
-        SCOPE_IDENTITY()
-    );
+    SET NOCOUNT ON;
 
-    SELECT 'Leave synced to attendance successfully' AS ConfirmationMessage;
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        ----------------------------------------------------------
+        -- 1. Read request details
+        ----------------------------------------------------------
+        DECLARE @EmployeeID INT;
+        DECLARE @LeaveType VARCHAR(50);
+        DECLARE @Duration INT;
+        DECLARE @Status VARCHAR(50);
+        DECLARE @StartDate DATE;
+        DECLARE @EndDate DATE;
+
+        SELECT 
+            @EmployeeID = lr.employee_id,
+            @LeaveType = l.leave_type,
+            @Duration = lr.duration,
+            @Status = lr.status,
+            @StartDate = lr.approval_timing,
+            @EndDate = DATEADD(DAY, lr.duration - 1, lr.approval_timing)
+        FROM LeaveRequest lr
+        JOIN [Leave] l ON lr.leave_id = l.leave_id
+        WHERE lr.request_id = @LeaveRequestID;
+
+        ----------------------------------------------------------
+        -- 2. Validate leave exists
+        ----------------------------------------------------------
+        IF @EmployeeID IS NULL
+        BEGIN
+            RAISERROR('Leave request does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ----------------------------------------------------------
+        -- 3. Only approved/finalized leave syncs to attendance
+        ----------------------------------------------------------
+        IF @Status NOT IN ('Approved', 'Finalized', 'Approved - Balance Updated', 'Approved - Document Verified')
+        BEGIN
+            RAISERROR('Only approved or finalized leave can sync to attendance.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ----------------------------------------------------------
+        -- 4. Loop through each leave day and insert exception
+        ----------------------------------------------------------
+        DECLARE @i INT = 0;
+        DECLARE @CurrentDate DATE;
+
+        WHILE @i < @Duration
+        BEGIN
+            SET @CurrentDate = DATEADD(DAY, @i, @StartDate);
+
+            INSERT INTO [Exception] ([name], category, [date], status)
+            VALUES (
+                @LeaveType + ' Leave',
+                'Leave',
+                @CurrentDate,
+                'Active'
+            );
+
+            DECLARE @ExceptionID INT = SCOPE_IDENTITY();
+
+            INSERT INTO Employee_Exception (employee_id, exception_id)
+            VALUES (@EmployeeID, @ExceptionID);
+
+            SET @i = @i + 1;
+        END;
+
+        ----------------------------------------------------------
+        -- 5. Return success
+        ----------------------------------------------------------
+        COMMIT TRANSACTION;
+
+        SELECT 'Leave synced to attendance successfully' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
 END;
 GO
---44 UpdateInsuranceBrackets
+
+--- 44 UpdateInsuranceBrackets
+-- PROCEDURE: UpdateInsuranceBrackets
 CREATE PROCEDURE UpdateInsuranceBrackets
     @BracketID INT,
     @NewMinSalary DECIMAL(10,2),
@@ -2082,42 +2730,87 @@ CREATE PROCEDURE UpdateInsuranceBrackets
     @UpdatedBy INT
 AS
 BEGIN
-    DECLARE @InsuranceType VARCHAR(50);
-    
-    SELECT @InsuranceType = type
-    FROM Insurance
-    WHERE insurance_id = @BracketID;
-    
-    UPDATE Insurance
-    SET contribution_rate = @NewEmployeeContribution,
-        coverage = 'MinSalary=' + CAST(@NewMinSalary AS VARCHAR(20)) + 
-                   ';MaxSalary=' + CAST(@NewMaxSalary AS VARCHAR(20)) + 
-                   ';EmployerContribution=' + CAST(@NewEmployerContribution AS VARCHAR(20))
-    WHERE insurance_id = @BracketID;
-    
-    INSERT INTO Notification (message_content, urgency, notification_type)
-    VALUES (
-        'Insurance bracket ID ' + CAST(@BracketID AS VARCHAR(10)) + 
-        ' (' + @InsuranceType + ') updated by Employee ID ' + CAST(@UpdatedBy AS VARCHAR(10)) + 
-        '. New salary range: ' + CAST(@NewMinSalary AS VARCHAR(20)) + ' - ' + CAST(@NewMaxSalary AS VARCHAR(20)) + 
-        '. Employee contribution: ' + CAST(@NewEmployeeContribution AS VARCHAR(20)) + 
-        '%, Employer contribution: ' + CAST(@NewEmployerContribution AS VARCHAR(20)) + '%',
-        'Medium',
-        'Insurance Update'
-    );
-    
-    INSERT INTO Employee_Notification (employee_id, notification_id, delivery_status, delivered_at)
-    VALUES (
-        @UpdatedBy,
-        SCOPE_IDENTITY(),
-        'Delivered',
-        GETDATE()
-    );
+    SET NOCOUNT ON;
 
-    SELECT 'Insurance bracket updated successfully' AS ConfirmationMessage;
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        ------------------------------------------------------
+        -- 1. Validate insurance bracket exists
+        ------------------------------------------------------
+        DECLARE @InsuranceType VARCHAR(50);
+
+        SELECT @InsuranceType = [type]
+        FROM Insurance
+        WHERE insurance_id = @BracketID;
+
+        IF @InsuranceType IS NULL
+        BEGIN
+            RAISERROR('Insurance bracket does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ------------------------------------------------------
+        -- 2. Validate updater exists
+        ------------------------------------------------------
+        IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @UpdatedBy)
+        BEGIN
+            RAISERROR('UpdatedBy employee does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        ------------------------------------------------------
+        -- 3. Update bracket details
+        ------------------------------------------------------
+        UPDATE Insurance
+        SET contribution_rate = @NewEmployeeContribution,
+            coverage = 'MinSalary=' + CAST(@NewMinSalary AS VARCHAR(20)) +
+                       ';MaxSalary=' + CAST(@NewMaxSalary AS VARCHAR(20)) +
+                       ';EmployerContribution=' + CAST(@NewEmployerContribution AS VARCHAR(20))
+        WHERE insurance_id = @BracketID;
+
+        ------------------------------------------------------
+        -- 4. Create notification
+        ------------------------------------------------------
+        INSERT INTO Notification (message_content, urgency, notification_type)
+        VALUES (
+            'Insurance bracket ID ' + CAST(@BracketID AS VARCHAR(10)) + 
+            ' (' + @InsuranceType + ') updated by Employee ID ' + CAST(@UpdatedBy AS VARCHAR(10)) +
+            '. New salary range: ' + CAST(@NewMinSalary AS VARCHAR(20)) + ' - ' + CAST(@NewMaxSalary AS VARCHAR(20)) +
+            '. Employee contribution: ' + CAST(@NewEmployeeContribution AS VARCHAR(20)) + 
+            '%, Employer contribution: ' + CAST(@NewEmployerContribution AS VARCHAR(20)) + '%',
+            'Medium',
+            'Insurance Update'
+        );
+
+        DECLARE @NotificationID INT = SCOPE_IDENTITY();
+
+        ------------------------------------------------------
+        -- 5. Assign notification to employee
+        ------------------------------------------------------
+        INSERT INTO Employee_Notification (employee_id, notification_id, delivery_status, delivered_at)
+        VALUES (@UpdatedBy, @NotificationID, 'Delivered', GETDATE());
+
+        ------------------------------------------------------
+        -- 6. Confirmation
+        ------------------------------------------------------
+        COMMIT TRANSACTION;
+
+        SELECT 'Insurance bracket updated successfully' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
+
 END;
 GO
---45 ApprovePolicyUpdate
+
+-- 45 ApprovePolicyUpdate
+-- PROCEDURE: ApprovePolicyUpdate
 CREATE OR ALTER PROCEDURE ApprovePolicyUpdate
     @PolicyID INT,
     @ApprovedBy INT
@@ -2125,11 +2818,71 @@ AS
 BEGIN
     SET NOCOUNT ON;
 
-    UPDATE PayrollPolicy
-    SET description = description + ' | Approved by ' + CAST(@ApprovedBy AS VARCHAR)
-    WHERE policy_id = @PolicyID;
+    BEGIN TRY
+        BEGIN TRANSACTION;
 
-    PRINT 'Policy update approved.';
+        -----------------------------------------------------
+        -- 1. Validate policy exists
+        -----------------------------------------------------
+        IF NOT EXISTS (SELECT 1 FROM PayrollPolicy WHERE policy_id = @PolicyID)
+        BEGIN
+            RAISERROR('Policy ID does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        -----------------------------------------------------
+        -- 2. Validate approver exists
+        -----------------------------------------------------
+        IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @ApprovedBy)
+        BEGIN
+            RAISERROR('Approving employee does not exist.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END;
+
+        -----------------------------------------------------
+        -- 3. Update policy description with approval info
+        -----------------------------------------------------
+        UPDATE PayrollPolicy
+        SET description = description 
+                          + ' | Approved by Employee ' + CAST(@ApprovedBy AS VARCHAR(10))
+                          + ' on ' + CONVERT(VARCHAR(10), GETDATE(), 120)
+        WHERE policy_id = @PolicyID;
+
+        -----------------------------------------------------
+        -- 4. Create notification
+        -----------------------------------------------------
+        INSERT INTO Notification (message_content, urgency, notification_type)
+        VALUES (
+            'Payroll policy ID ' + CAST(@PolicyID AS VARCHAR(10)) 
+            + ' has been approved by Employee ID ' + CAST(@ApprovedBy AS VARCHAR(10)),
+            'High',
+            'Policy Approval'
+        );
+
+        DECLARE @NotificationID INT = SCOPE_IDENTITY();
+
+        -----------------------------------------------------
+        -- 5. Deliver notification to approver
+        -----------------------------------------------------
+        INSERT INTO Employee_Notification (employee_id, notification_id, delivery_status, delivered_at)
+        VALUES (@ApprovedBy, @NotificationID, 'Delivered', GETDATE());
+
+        -----------------------------------------------------
+        -- 6. Return confirmation
+        -----------------------------------------------------
+        COMMIT TRANSACTION;
+
+        SELECT 'Policy update approved successfully' AS ConfirmationMessage;
+
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
+
 END;
 GO
+
  

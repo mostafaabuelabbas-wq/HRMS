@@ -177,5 +177,63 @@ EXEC EnableFirstInLastOut @Enable = 1;
 EXEC EnableFirstInLastOut @Enable = 0;
 SELECT * FROM PayrollPolicy WHERE [type] = 'Attendance Processing';
 */
---16
+--16 TagAttendanceSource
+/*
+SELECT * FROM Attendance WHERE attendance_id = 1;
+SELECT * FROM AttendanceSource WHERE attendance_id = 1;
+EXEC TagAttendanceSource
+    @AttendanceID = 1,
+    @SourceType = 'GPS',
+    @DeviceID = NULL,
+    @Latitude = 30.0444000,
+    @Longitude = 31.2357000;
+SELECT * FROM AttendanceSource WHERE attendance_id = 1;
+*/
+--17 SyncOfflineAttendance
+/*
+SELECT * FROM Attendance WHERE employee_id = 1;
+SELECT * FROM AttendanceSource;
 
+EXEC SyncOfflineAttendance
+    @DeviceID = 1,
+    @EmployeeID = 1,
+    @ClockTime = '2024-02-10 09:05',
+    @Type = 'IN';
+
+SELECT TOP 1 * 
+FROM Attendance
+WHERE employee_id = 1
+ORDER BY attendance_id DESC;
+
+SELECT * FROM AttendanceSource WHERE attendance_id = 1;
+*/
+
+
+/*
+EXEC LogAttendanceEdit 
+    @AttendanceID = 1,
+    @EditedBy = 1,
+    @OldValue = '2024-02-05 09:01',
+    @NewValue = '2024-02-05 09:10',
+    @EditTimestamp = '2025-01-01 10:00:00'
+
+*/
+/*
+SELECT * FROM HolidayLeave;
+SELECT * FROM [Leave];
+EXEC ApplyHolidayOverrides
+    @HolidayID = 4,   -- the ID created above
+    @EmployeeID = 2;
+SELECT * FROM Employee_Exception WHERE employee_id = 2;
+*/
+/*
+SELECT * FROM Employee_Role WHERE employee_id = 3;
+SELECT role_id, role_name FROM Role;
+
+SELECT * FROM Employee_Role WHERE employee_id = 3;
+EXEC ManageUserAccounts
+    @UserID = 3,
+    @Role = 'PayrollOfficer',
+    @Action = 'Remove';
+SELECT * FROM Employee_Role WHERE employee_id = 3;
+*/

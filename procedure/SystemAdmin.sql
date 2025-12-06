@@ -1112,34 +1112,82 @@ CREATE PROCEDURE SyncOfflineAttendance
     @Type VARCHAR(10)
 AS
 BEGIN
+    SET NOCOUNT ON;
+
+    ---------------------------------------------------------
+    -- 1. Validate Employee
+    ---------------------------------------------------------
+    IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @EmployeeID)
+    BEGIN
+        SELECT 'Error: Employee does not exist.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 2. Validate Device
+    ---------------------------------------------------------
+    IF NOT EXISTS (SELECT 1 FROM Device WHERE device_id = @DeviceID)
+    BEGIN
+        SELECT 'Error: Device does not exist.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 3. Validate Punch Type
+    ---------------------------------------------------------
+    IF @Type NOT IN ('IN','OUT')
+    BEGIN
+        SELECT 'Error: Punch type must be IN or OUT.' AS Message;
+        RETURN;
+    END;
+
+    DECLARE @AttendanceID INT;
+
+    ---------------------------------------------------------
+    -- 4. IN Punch: Create new attendance record
+    ---------------------------------------------------------
     IF @Type = 'IN'
     BEGIN
         INSERT INTO Attendance (employee_id, entry_time, login_method)
-        VALUES (@EmployeeID, @ClockTime, 'Device');
+        VALUES (@EmployeeID, @ClockTime, 'Offline Device');
 
-        INSERT INTO AttendanceSource (attendance_id, device_id, source_type)
-        VALUES (SCOPE_IDENTITY(), @DeviceID, 'Offline Sync');
-    END
-    ELSE IF @Type = 'OUT'
+        SET @AttendanceID = SCOPE_IDENTITY();
+
+        INSERT INTO AttendanceSource (attendance_id, device_id, source_type, recorded_at)
+        VALUES (@AttendanceID, @DeviceID, 'Offline Sync', GETDATE());
+
+        SELECT 'Offline IN punch synced successfully.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 5. OUT Punch: Update latest open attendance entry
+    ---------------------------------------------------------
+    SELECT TOP 1 @AttendanceID = attendance_id
+    FROM Attendance
+    WHERE employee_id = @EmployeeID
+      AND exit_time IS NULL
+      AND entry_time <= @ClockTime
+    ORDER BY entry_time DESC;
+
+    IF @AttendanceID IS NULL
     BEGIN
-        UPDATE Attendance
-        SET exit_time = @ClockTime,
-            logout_method = 'Device'
-        WHERE employee_id = @EmployeeID
-            AND CAST(entry_time AS DATE) = CAST(@ClockTime AS DATE)
-            AND exit_time IS NULL;
+        SELECT 'Error: No matching IN punch exists for this OUT punch.' AS Message;
+        RETURN;
+    END;
 
-        INSERT INTO AttendanceSource (attendance_id, device_id, source_type)
-        SELECT TOP 1 attendance_id, @DeviceID, 'Offline Sync'
-        FROM Attendance
-        WHERE employee_id = @EmployeeID
-            AND CAST(entry_time AS DATE) = CAST(@ClockTime AS DATE)
-        ORDER BY entry_time DESC;
-    END
+    UPDATE Attendance
+    SET exit_time = @ClockTime,
+        logout_method = 'Offline Device'
+    WHERE attendance_id = @AttendanceID;
 
-    SELECT 'Offline attendance synced successfully' AS ConfirmationMessage;
+    INSERT INTO AttendanceSource (attendance_id, device_id, source_type, recorded_at)
+    VALUES (@AttendanceID, @DeviceID, 'Offline Sync', GETDATE());
+
+    SELECT 'Offline OUT punch synced successfully.' AS ConfirmationMessage;
 END;
 GO
+
 
 -- 18. LogAttendanceEdit
 CREATE PROCEDURE LogAttendanceEdit
@@ -1150,17 +1198,75 @@ CREATE PROCEDURE LogAttendanceEdit
     @EditTimestamp DATETIME
 AS
 BEGIN
+    SET NOCOUNT ON;
+
+    ---------------------------------------------------------
+    -- 1. Validate Attendance Exists
+    ---------------------------------------------------------
+    IF NOT EXISTS (SELECT 1 FROM Attendance WHERE attendance_id = @AttendanceID)
+    BEGIN
+        SELECT 'Error: Attendance record does not exist.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 2. Validate Employee (Editor) Exists
+    ---------------------------------------------------------
+    IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @EditedBy)
+    BEGIN
+        SELECT 'Error: Editor (employee) does not exist.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 3. Validate Old/New Values
+    ---------------------------------------------------------
+    IF @OldValue IS NULL OR @NewValue IS NULL
+    BEGIN
+        SELECT 'Error: Old and new values cannot be NULL.' AS Message;
+        RETURN;
+    END;
+
+    IF @OldValue = @NewValue
+    BEGIN
+        SELECT 'Error: Old value and new value are identical.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 4. Validate Edit Timestamp
+    ---------------------------------------------------------
+    IF @EditTimestamp IS NULL
+    BEGIN
+        SELECT 'Error: Edit timestamp cannot be NULL.' AS Message;
+        RETURN;
+    END;
+
+    IF @EditTimestamp > GETDATE()
+    BEGIN
+        SELECT 'Error: Edit timestamp cannot be in future.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 5. Insert Log Entry
+    ---------------------------------------------------------
     INSERT INTO AttendanceLog (attendance_id, actor, [timestamp], reason)
     VALUES (
         @AttendanceID,
         @EditedBy,
         @EditTimestamp,
-        'Clock edit: Changed from ' + CONVERT(VARCHAR(30), @OldValue, 120) + ' to ' + CONVERT(VARCHAR(30), @NewValue, 120)
+        'Clock edit from ' + CONVERT(VARCHAR(30), @OldValue, 120) 
+        + ' to ' + CONVERT(VARCHAR(30), @NewValue, 120)
     );
 
+    ---------------------------------------------------------
+    -- 6. Confirmation
+    ---------------------------------------------------------
     SELECT 'Attendance edit logged successfully' AS ConfirmationMessage;
 END;
 GO
+
 
 -- 19. ApplyHolidayOverrides
 CREATE PROCEDURE ApplyHolidayOverrides
@@ -1168,23 +1274,52 @@ CREATE PROCEDURE ApplyHolidayOverrides
     @EmployeeID INT
 AS
 BEGIN
+    SET NOCOUNT ON;
+
+    ---------------------------------------------------------
+    -- 1. Validate Employee Exists
+    ---------------------------------------------------------
+    IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @EmployeeID)
+    BEGIN
+        SELECT 'Error: Employee does not exist.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 2. Validate Holiday Exists
+    ---------------------------------------------------------
+    IF NOT EXISTS (SELECT 1 FROM HolidayLeave WHERE leave_id = @HolidayID)
+    BEGIN
+        SELECT 'Error: Holiday does not exist.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 3. Insert Holiday Exceptions If They Exist
+    ---------------------------------------------------------
     INSERT INTO Employee_Exception (employee_id, exception_id)
     SELECT 
         @EmployeeID,
         e.exception_id
-    FROM Exception e
-    INNER JOIN HolidayLeave hl ON e.[name] = hl.holiday_name
+    FROM [Exception] e
+    INNER JOIN HolidayLeave hl 
+        ON e.[name] = hl.holiday_name
     WHERE hl.leave_id = @HolidayID
-        AND NOT EXISTS (
+      AND NOT EXISTS (
             SELECT 1 
             FROM Employee_Exception ee 
             WHERE ee.employee_id = @EmployeeID 
-                AND ee.exception_id = e.exception_id
+              AND ee.exception_id = e.exception_id
         );
 
-    SELECT 'Holiday override applied successfully to employee ' + CAST(@EmployeeID AS VARCHAR(10)) AS ConfirmationMessage;
+    ---------------------------------------------------------
+    -- 4. Confirmation Message
+    ---------------------------------------------------------
+    SELECT 'Holiday override applied successfully to employee ' 
+           + CAST(@EmployeeID AS VARCHAR(10)) AS ConfirmationMessage;
 END;
 GO
+
 -- 20. ManageUserAccounts
 CREATE PROCEDURE ManageUserAccounts
     @UserID INT,
@@ -1194,55 +1329,77 @@ AS
 BEGIN
     SET NOCOUNT ON;
 
-    DECLARE @RoleID INT;
+    ---------------------------------------------------------
+    -- 1. Validate Employee Exists
+    ---------------------------------------------------------
+    IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @UserID)
+    BEGIN
+        SELECT 'Error: User does not exist.' AS Message;
+        RETURN;
+    END;
 
-    -- Get role ID from role name
-    SELECT @RoleID = role_id
-    FROM Role
-    WHERE role_name = @Role;
+    ---------------------------------------------------------
+    -- 2. Get Role ID
+    ---------------------------------------------------------
+    DECLARE @RoleID INT = (SELECT role_id FROM Role WHERE role_name = @Role);
 
     IF @RoleID IS NULL
     BEGIN
-        SELECT 'Invalid role specified.' AS Message;
+        SELECT 'Error: Invalid role specified.' AS Message;
         RETURN;
-    END
+    END;
 
+    ---------------------------------------------------------
+    -- 3. Validate Action
+    ---------------------------------------------------------
+    IF @Action NOT IN ('Assign','Remove')
+    BEGIN
+        SELECT 'Error: Invalid action. Use Assign or Remove.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 4. ASSIGN ROLE
+    ---------------------------------------------------------
     IF @Action = 'Assign'
     BEGIN
         IF EXISTS (
-            SELECT 1 FROM Employee_Role
+            SELECT 1
+            FROM Employee_Role
             WHERE employee_id = @UserID AND role_id = @RoleID
         )
         BEGIN
-            SELECT 'User already has this role.' AS Message;
+            SELECT 'Error: User already has this role.' AS Message;
             RETURN;
-        END
+        END;
 
         INSERT INTO Employee_Role (employee_id, role_id, assigned_date)
         VALUES (@UserID, @RoleID, GETDATE());
 
         SELECT 'Role assigned successfully.' AS Message;
         RETURN;
-    END
+    END;
 
+    ---------------------------------------------------------
+    -- 5. REMOVE ROLE
+    ---------------------------------------------------------
     IF @Action = 'Remove'
     BEGIN
         IF NOT EXISTS (
-            SELECT 1 FROM Employee_Role
+            SELECT 1
+            FROM Employee_Role
             WHERE employee_id = @UserID AND role_id = @RoleID
         )
         BEGIN
-            SELECT 'Role was not assigned to this user.' AS Message;
+            SELECT 'Error: Role was not assigned to this user.' AS Message;
             RETURN;
-        END
+        END;
 
         DELETE FROM Employee_Role
         WHERE employee_id = @UserID AND role_id = @RoleID;
 
         SELECT 'Role removed successfully.' AS Message;
         RETURN;
-    END
-
-    SELECT 'Invalid action. Use Assign or Remove.' AS Message;
+    END;
 END;
 GO

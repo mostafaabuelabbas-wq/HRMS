@@ -194,11 +194,13 @@ INSERT INTO Mission (destination, start_date, end_date, status, employee_id, man
 INSERT INTO [Leave] (leave_type, leave_description) VALUES
 ('Vacation','Annual paid leave'),
 ('Sick','Medical leave'),
-('Probation','Probationary leave');
+('Probation','Probationary leave'),
+('Holiday','Official public holiday'); 
 
 DECLARE @lv1 INT = (SELECT leave_id FROM [Leave] WHERE leave_type='Vacation');
 DECLARE @lv2 INT = (SELECT leave_id FROM [Leave] WHERE leave_type='Sick');
 DECLARE @lv3 INT = (SELECT leave_id FROM [Leave] WHERE leave_type='Probation');
+DECLARE @lvHoliday INT = (SELECT leave_id FROM [Leave] WHERE leave_type='Holiday');
 
 INSERT INTO VacationLeave (leave_id, carry_over_days, approving_manager)
 VALUES (@lv1,5,@e1);
@@ -209,6 +211,9 @@ VALUES (@lv2,1,@e3);
 INSERT INTO ProbationLeave (leave_id, eligibility_start_date, probation_period)
 VALUES (@lv3,'2024-01-01',90);
 
+INSERT INTO HolidayLeave (leave_id, holiday_name, official_recognition, regional_scope)
+VALUES
+(@lvHoliday, 'New Year''s Day', 'Official', 'National');
 ------------------------------------------------------------
 -- 20. Leave Policies (3 rows)
 ------------------------------------------------------------

@@ -107,3 +107,75 @@ FROM Employee;
 SELECT * FROM EmployeeHierarchy;
 EXEC ViewOrgHierarchy;
 */
+--10 AssignShiftToEmployee
+/*
+SELECT employee_id, full_name, is_active FROM Employee WHERE employee_id = 2;
+SELECT * FROM ShiftSchedule WHERE shift_id = 1;
+SELECT * FROM ShiftAssignment WHERE employee_id = 2;
+
+EXEC AssignShiftToEmployee 
+    @EmployeeID = 2,
+    @ShiftID = 1,
+    @StartDate = '2024-03-01',
+    @EndDate = '2024-03-31';
+
+SELECT * FROM ShiftAssignment WHERE employee_id = 2;
+*/
+
+--11 UpdateShiftStatus
+/*
+SELECT * FROM ShiftAssignment WHERE assignment_id = 2;
+
+EXEC UpdateShiftStatus 
+    @ShiftAssignmentID = 2,
+    @Status = 'Approved';
+
+SELECT * FROM ShiftAssignment WHERE assignment_id = 2;
+*/
+--12 AssignShiftToDepartment
+/*
+SELECT employee_id, full_name, is_active 
+FROM Employee 
+WHERE department_id = 2;
+SELECT * FROM ShiftAssignment WHERE employee_id = 2;
+EXEC AssignShiftToDepartment
+    @DepartmentID = 2,
+    @ShiftID = 1,
+    @StartDate = '2024-03-01',
+    @EndDate = '2024-03-31';
+
+SELECT * FROM ShiftAssignment WHERE employee_id = 2;
+*/
+--13 AssignCustomShift
+/*
+SELECT employee_id, full_name, is_active FROM Employee WHERE employee_id = 3;
+SELECT * FROM ShiftAssignment WHERE employee_id = 3;
+EXEC AssignCustomShift
+    @EmployeeID = 3,
+    @ShiftName = 'Consulting Block',
+    @ShiftType = 'Custom',
+    @StartTime = '10:00',
+    @EndTime = '18:00',
+    @StartDate = '2024-03-01',
+    @EndDate = '2024-03-15';
+SELECT * FROM ShiftAssignment WHERE employee_id = 3;
+*/
+--14 ConfigureSplitShift
+/*
+SELECT * FROM ShiftSchedule WHERE name LIKE 'TechSplit%';
+EXEC ConfigureSplitShift
+    @ShiftName = 'TechSplit',
+    @FirstSlotStart = '08:00',
+    @FirstSlotEnd = '12:00',
+    @SecondSlotStart = '16:00',
+    @SecondSlotEnd = '20:00';
+SELECT * FROM ShiftSchedule WHERE name LIKE 'TechSplit%';
+*/
+/*--15
+SELECT * FROM PayrollPolicy WHERE [type] = 'Attendance Processing';
+EXEC EnableFirstInLastOut @Enable = 1;
+EXEC EnableFirstInLastOut @Enable = 0;
+SELECT * FROM PayrollPolicy WHERE [type] = 'Attendance Processing';
+*/
+--16
+

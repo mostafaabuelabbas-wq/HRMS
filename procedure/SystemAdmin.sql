@@ -555,12 +555,80 @@ CREATE PROCEDURE AssignShiftToEmployee
     @EndDate DATE
 AS
 BEGIN
+    SET NOCOUNT ON;
+
+    ---------------------------------------------------------
+    -- 1. Validate Employee Exists
+    ---------------------------------------------------------
+    IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @EmployeeID)
+    BEGIN
+        SELECT 'Error: Employee does not exist.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 2. Validate Employee Is Active
+    ---------------------------------------------------------
+    IF EXISTS (
+        SELECT 1 FROM Employee
+        WHERE employee_id = @EmployeeID AND is_active = 0
+    )
+    BEGIN
+        SELECT 'Error: Cannot assign a shift to an inactive employee.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 3. Validate Shift Exists
+    ---------------------------------------------------------
+    IF NOT EXISTS (SELECT 1 FROM ShiftSchedule WHERE shift_id = @ShiftID)
+    BEGIN
+        SELECT 'Error: Shift does not exist.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 4. Validate Date Range
+    ---------------------------------------------------------
+    IF @StartDate > @EndDate
+    BEGIN
+        SELECT 'Error: Start date cannot be after end date.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 5. Prevent overlapping assignments for the same employee
+    ---------------------------------------------------------
+    IF EXISTS (
+        SELECT 1 
+        FROM ShiftAssignment
+        WHERE employee_id = @EmployeeID
+        AND status = 'Active'
+        AND (
+                (@StartDate BETWEEN start_date AND end_date)
+             OR (@EndDate BETWEEN start_date AND end_date)
+             OR (start_date BETWEEN @StartDate AND @EndDate)
+            )
+    )
+    BEGIN
+        SELECT 'Error: Employee already has an overlapping active shift assignment.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 6. Insert new shift assignment
+    ---------------------------------------------------------
     INSERT INTO ShiftAssignment (employee_id, shift_id, start_date, end_date, status)
     VALUES (@EmployeeID, @ShiftID, @StartDate, @EndDate, 'Active');
 
-    SELECT 'Shift assigned successfully to employee ' + CAST(@EmployeeID AS VARCHAR(10)) AS ConfirmationMessage;
+    ---------------------------------------------------------
+    -- 7. Confirmation
+    ---------------------------------------------------------
+    SELECT 'Shift assigned successfully to employee ' 
+           + CAST(@EmployeeID AS VARCHAR(10)) AS ConfirmationMessage;
 END;
 GO
+
 
 -- 11. UpdateShiftStatus
 CREATE PROCEDURE UpdateShiftStatus
@@ -568,13 +636,50 @@ CREATE PROCEDURE UpdateShiftStatus
     @Status VARCHAR(20)
 AS
 BEGIN
+    SET NOCOUNT ON;
+
+    ---------------------------------------------------------
+    -- 1. Validate Shift Assignment Exists
+    ---------------------------------------------------------
+    IF NOT EXISTS (SELECT 1 FROM ShiftAssignment WHERE assignment_id = @ShiftAssignmentID)
+    BEGIN
+        SELECT 'Error: Shift assignment does not exist.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 2. Validate Status Value
+    ---------------------------------------------------------
+    IF @Status NOT IN ('Approved','Cancelled','Entered','Expired','Postponed','Rejected','Submitted')
+    BEGIN
+        SELECT 'Error: Invalid status value. Allowed values are: Approved, Cancelled, Entered, Expired, Postponed, Rejected, Submitted.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 3. Prevent setting NULL or empty status
+    ---------------------------------------------------------
+    IF @Status IS NULL OR LTRIM(RTRIM(@Status)) = ''
+    BEGIN
+        SELECT 'Error: Status cannot be empty.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 4. Update Shift Status
+    ---------------------------------------------------------
     UPDATE ShiftAssignment
     SET status = @Status
     WHERE assignment_id = @ShiftAssignmentID;
 
-    SELECT 'Shift status updated to ' + @Status AS ConfirmationMessage;
+    ---------------------------------------------------------
+    -- 5. Confirmation Message
+    ---------------------------------------------------------
+    SELECT 'Shift assignment ' + CAST(@ShiftAssignmentID AS VARCHAR(10)) 
+           + ' updated to status: ' + @Status AS ConfirmationMessage;
 END;
 GO
+
 -- 12. AssignShiftToDepartment
 CREATE PROCEDURE AssignShiftToDepartment
     @DepartmentID INT,
@@ -583,20 +688,90 @@ CREATE PROCEDURE AssignShiftToDepartment
     @EndDate DATE
 AS
 BEGIN
+    SET NOCOUNT ON;
+
+    ---------------------------------------------------------
+    -- 1. Validate Department Exists
+    ---------------------------------------------------------
+    IF NOT EXISTS (SELECT 1 FROM Department WHERE department_id = @DepartmentID)
+    BEGIN
+        SELECT 'Error: Department does not exist.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 2. Validate Shift Exists
+    ---------------------------------------------------------
+    IF NOT EXISTS (SELECT 1 FROM ShiftSchedule WHERE shift_id = @ShiftID)
+    BEGIN
+        SELECT 'Error: Shift does not exist.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 3. Validate Date Range
+    ---------------------------------------------------------
+    IF @StartDate > @EndDate
+    BEGIN
+        SELECT 'Error: Start date cannot be after end date.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 4. Check employees in department
+    ---------------------------------------------------------
+    IF NOT EXISTS (
+        SELECT 1 
+        FROM Employee 
+        WHERE department_id = @DepartmentID AND is_active = 1
+    )
+    BEGIN
+        SELECT 'Error: No active employees found in this department.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 5. Prevent overlapping assignments for department employees
+    ---------------------------------------------------------
+    IF EXISTS (
+        SELECT 1
+        FROM ShiftAssignment sa
+        JOIN Employee e ON sa.employee_id = e.employee_id
+        WHERE e.department_id = @DepartmentID
+        AND sa.status = 'Active'
+        AND (
+                (@StartDate BETWEEN sa.start_date AND sa.end_date)
+             OR (@EndDate BETWEEN sa.start_date AND sa.end_date)
+             OR (sa.start_date BETWEEN @StartDate AND @EndDate)
+            )
+    )
+    BEGIN
+        SELECT 'Error: One or more employees already have overlapping shift assignments.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 6. Assign shift to all active employees in the department
+    ---------------------------------------------------------
     INSERT INTO ShiftAssignment (employee_id, shift_id, start_date, end_date, status)
     SELECT 
-        e.employee_id,
+        employee_id,
         @ShiftID,
         @StartDate,
         @EndDate,
         'Active'
-    FROM Employee e
-    WHERE e.department_id = @DepartmentID
-        AND e.is_active = 1;
+    FROM Employee
+    WHERE department_id = @DepartmentID
+      AND is_active = 1;
 
-    SELECT 'Shift assigned successfully to all employees in department ' + CAST(@DepartmentID AS VARCHAR(10)) AS ConfirmationMessage;
+    ---------------------------------------------------------
+    -- 7. Confirmation message
+    ---------------------------------------------------------
+    SELECT 'Shift assigned successfully to department ' 
+           + CAST(@DepartmentID AS VARCHAR(10)) AS ConfirmationMessage;
 END;
 GO
+
 -- 13. AssignCustomShift
 CREATE PROCEDURE AssignCustomShift
     @EmployeeID INT,
@@ -608,15 +783,100 @@ CREATE PROCEDURE AssignCustomShift
     @EndDate DATE
 AS
 BEGIN
+    SET NOCOUNT ON;
+
+    ---------------------------------------------------------
+    -- 1. Validate Employee Exists
+    ---------------------------------------------------------
+    IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @EmployeeID)
+    BEGIN
+        SELECT 'Error: Employee does not exist.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 2. Validate Employee is Active
+    ---------------------------------------------------------
+    IF EXISTS (SELECT 1 FROM Employee WHERE employee_id = @EmployeeID AND is_active = 0)
+    BEGIN
+        SELECT 'Error: Cannot assign a shift to an inactive employee.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 3. Validate Name and Type
+    ---------------------------------------------------------
+    IF @ShiftName IS NULL OR LTRIM(RTRIM(@ShiftName)) = ''
+    BEGIN
+        SELECT 'Error: Shift name cannot be empty.' AS Message;
+        RETURN;
+    END;
+
+    IF @ShiftType IS NULL OR LTRIM(RTRIM(@ShiftType)) = ''
+    BEGIN
+        SELECT 'Error: Shift type cannot be empty.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 4. Validate Time Range
+    ---------------------------------------------------------
+    IF @StartTime = @EndTime
+    BEGIN
+        SELECT 'Error: Start time cannot equal end time.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 5. Validate Date Range
+    ---------------------------------------------------------
+    IF @StartDate > @EndDate
+    BEGIN
+        SELECT 'Error: Start date cannot be after end date.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 6. Prevent Overlapping Assignments
+    ---------------------------------------------------------
+    IF EXISTS (
+        SELECT 1 
+        FROM ShiftAssignment 
+        WHERE employee_id = @EmployeeID
+        AND status = 'Active'
+        AND (
+                (@StartDate BETWEEN start_date AND end_date)
+             OR (@EndDate BETWEEN start_date AND end_date)
+             OR (start_date BETWEEN @StartDate AND @EndDate)
+            )
+    )
+    BEGIN
+        SELECT 'Error: Employee already has an overlapping shift assignment.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 7. Create Custom Shift in ShiftSchedule
+    ---------------------------------------------------------
     INSERT INTO ShiftSchedule (name, type, start_time, end_time, status)
     VALUES (@ShiftName, @ShiftType, @StartTime, @EndTime, 'Active');
 
-    INSERT INTO ShiftAssignment (employee_id, shift_id, start_date, end_date, status)
-    VALUES (@EmployeeID, SCOPE_IDENTITY(), @StartDate, @EndDate, 'Active');
+    DECLARE @NewShiftID INT = SCOPE_IDENTITY();
 
-    SELECT 'Custom shift created and assigned successfully to employee ' + CAST(@EmployeeID AS VARCHAR(10)) AS ConfirmationMessage;
+    ---------------------------------------------------------
+    -- 8. Assign Shift to Employee
+    ---------------------------------------------------------
+    INSERT INTO ShiftAssignment (employee_id, shift_id, start_date, end_date, status)
+    VALUES (@EmployeeID, @NewShiftID, @StartDate, @EndDate, 'Active');
+
+    ---------------------------------------------------------
+    -- 9. Final Confirmation
+    ---------------------------------------------------------
+    SELECT 'Custom shift created and assigned successfully to employee '
+           + CAST(@EmployeeID AS VARCHAR(10)) AS ConfirmationMessage;
 END;
 GO
+
 
 -- 14. ConfigureSplitShift
 CREATE PROCEDURE ConfigureSplitShift
@@ -627,38 +887,115 @@ CREATE PROCEDURE ConfigureSplitShift
     @SecondSlotEnd TIME
 AS
 BEGIN
+    SET NOCOUNT ON;
+
+    ---------------------------------------------------------
+    -- 1. Validate Shift Name
+    ---------------------------------------------------------
+    IF @ShiftName IS NULL OR LTRIM(RTRIM(@ShiftName)) = ''
+    BEGIN
+        SELECT 'Error: Shift name cannot be empty.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 2. Validate Time Logic
+    ---------------------------------------------------------
+    IF @FirstSlotStart >= @FirstSlotEnd
+    BEGIN
+        SELECT 'Error: First slot start time must be before end time.' AS Message;
+        RETURN;
+    END;
+
+    IF @SecondSlotStart >= @SecondSlotEnd
+    BEGIN
+        SELECT 'Error: Second slot start time must be before end time.' AS Message;
+        RETURN;
+    END;
+
+    IF @FirstSlotEnd >= @SecondSlotStart
+    BEGIN
+        SELECT 'Error: Slot 1 must end before Slot 2 begins.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 3. Prevent Duplicate Shift Names
+    ---------------------------------------------------------
+    IF EXISTS (SELECT 1 FROM ShiftSchedule WHERE name LIKE @ShiftName + '%')
+    BEGIN
+        SELECT 'Error: A split shift with this name already exists.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 4. Calculate Break Duration
+    ---------------------------------------------------------
+    DECLARE @BreakDuration INT =
+        DATEDIFF(MINUTE, @FirstSlotEnd, @SecondSlotStart);
+
+    ---------------------------------------------------------
+    -- 5. Insert Slot 1
+    ---------------------------------------------------------
     INSERT INTO ShiftSchedule (name, type, start_time, end_time, break_duration, status)
     VALUES (
         @ShiftName + ' - Slot 1',
         'Split Shift',
         @FirstSlotStart,
         @FirstSlotEnd,
-        DATEDIFF(MINUTE, @FirstSlotEnd, @SecondSlotStart),
+        @BreakDuration,
         'Active'
     );
 
-    INSERT INTO ShiftSchedule (name, type, start_time, end_time, status)
+    ---------------------------------------------------------
+    -- 6. Insert Slot 2
+    ---------------------------------------------------------
+    INSERT INTO ShiftSchedule (name, type, start_time, end_time, break_duration, status)
     VALUES (
         @ShiftName + ' - Slot 2',
         'Split Shift',
         @SecondSlotStart,
         @SecondSlotEnd,
+        NULL,
         'Active'
     );
 
+    ---------------------------------------------------------
+    -- 7. Confirmation Message
+    ---------------------------------------------------------
     SELECT 'Split shift configured successfully: ' + @ShiftName AS ConfirmationMessage;
 END;
 GO
+
 
 -- 15. EnableFirstInLastOut
 CREATE PROCEDURE EnableFirstInLastOut
     @Enable BIT
 AS
 BEGIN
+    SET NOCOUNT ON;
+
+    ---------------------------------------------------------
+    -- 1. Validate input
+    ---------------------------------------------------------
+    IF @Enable IS NULL
+    BEGIN
+        SELECT 'Error: Enable must be 0 or 1.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 2. Check if the policy already exists
+    ---------------------------------------------------------
     IF EXISTS (SELECT 1 FROM PayrollPolicy WHERE [type] = 'Attendance Processing')
     BEGIN
         UPDATE PayrollPolicy
-        SET [description] = CASE WHEN @Enable = 1 THEN 'First In/Last Out: Enabled' ELSE 'First In/Last Out: Disabled' END,
+        SET 
+            [description] = CASE 
+                                WHEN @Enable = 1 
+                                THEN 'First In/Last Out Enabled'
+                                ELSE 'First In/Last Out Disabled'
+                            END,
             effective_date = GETDATE()
         WHERE [type] = 'Attendance Processing';
     END
@@ -668,13 +1005,27 @@ BEGIN
         VALUES (
             GETDATE(),
             'Attendance Processing',
-            CASE WHEN @Enable = 1 THEN 'First In/Last Out: Enabled' ELSE 'First In/Last Out: Disabled' END
+            CASE 
+                WHEN @Enable = 1 
+                THEN 'First In/Last Out Enabled'
+                ELSE 'First In/Last Out Disabled'
+            END
         );
-    END
+    END;
 
-    SELECT CASE WHEN @Enable = 1 THEN 'First In/Last Out attendance processing enabled' ELSE 'First In/Last Out attendance processing disabled' END AS ConfirmationMessage;
+    ---------------------------------------------------------
+    -- 3. Final confirmation
+    ---------------------------------------------------------
+    SELECT CASE 
+            WHEN @Enable = 1 
+            THEN 'First In/Last Out attendance processing enabled'
+            ELSE 'First In/Last Out attendance processing disabled'
+           END AS ConfirmationMessage;
 END;
 GO
+
+
+
 
 -- 16. TagAttendanceSource
 CREATE PROCEDURE TagAttendanceSource
@@ -685,12 +1036,73 @@ CREATE PROCEDURE TagAttendanceSource
     @Longitude DECIMAL(10,7)
 AS
 BEGIN
+    SET NOCOUNT ON;
+
+    ---------------------------------------------------------
+    -- 1. Validate Attendance Exists
+    ---------------------------------------------------------
+    IF NOT EXISTS (SELECT 1 FROM Attendance WHERE attendance_id = @AttendanceID)
+    BEGIN
+        SELECT 'Error: Attendance record does not exist.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 2. Validate Device Exists (if device ID is provided)
+    ---------------------------------------------------------
+    IF @DeviceID IS NOT NULL AND 
+       NOT EXISTS (SELECT 1 FROM Device WHERE device_id = @DeviceID)
+    BEGIN
+        SELECT 'Error: Device does not exist.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 3. Validate SourceType
+    ---------------------------------------------------------
+    IF @SourceType NOT IN ('Device','Terminal','GPS')
+    BEGIN
+        SELECT 'Error: Invalid source type. Allowed: Device, Terminal, GPS.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 4. Validate GPS Coordinates (only if SourceType = 'GPS')
+    ---------------------------------------------------------
+    IF @SourceType = 'GPS'
+    BEGIN
+        IF @Latitude IS NULL OR @Longitude IS NULL
+        BEGIN
+            SELECT 'Error: GPS coordinates required for GPS source type.' AS Message;
+            RETURN;
+        END;
+
+        IF @Latitude NOT BETWEEN -90 AND 90
+        BEGIN
+            SELECT 'Error: Invalid latitude value.' AS Message;
+            RETURN;
+        END;
+
+        IF @Longitude NOT BETWEEN -180 AND 180
+        BEGIN
+            SELECT 'Error: Invalid longitude value.' AS Message;
+            RETURN;
+        END;
+    END;
+
+    ---------------------------------------------------------
+    -- 5. Insert into AttendanceSource
+    ---------------------------------------------------------
     INSERT INTO AttendanceSource (attendance_id, device_id, source_type, latitude, longitude)
     VALUES (@AttendanceID, @DeviceID, @SourceType, @Latitude, @Longitude);
 
-    SELECT 'Attendance source tagged successfully' AS ConfirmationMessage;
+    ---------------------------------------------------------
+    -- 6. Confirmation Message
+    ---------------------------------------------------------
+    SELECT 'Attendance source tagged successfully.' AS ConfirmationMessage;
 END;
 GO
+
 
 -- 17. SyncOfflineAttendance
 CREATE PROCEDURE SyncOfflineAttendance

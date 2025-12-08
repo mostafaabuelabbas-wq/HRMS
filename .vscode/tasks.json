@@ -4,17 +4,17 @@
     {
       "label": "Reset HRMS Tables",
       "type": "shell",
-      "command": "sqlcmd -S localhost\\SQLEXPRESS -d HRMS -E -i drop_script.sql"
+      "command": "sqlcmd -S localhost,1433 -U sa -P 'YourStrong!Passw0rd' -d HRMS -i drop_script.sql"
     },
     {
       "label": "Load Schema",
       "type": "shell",
-      "command": "sqlcmd -S localhost\\SQLEXPRESS -d HRMS -E -i schema.sql"
+      "command": "sqlcmd -S localhost,1433 -U sa -P 'YourStrong!Passw0rd' -d HRMS -i schema.sql"
     },
     {
       "label": "Insert Data",
       "type": "shell",
-      "command": "sqlcmd -S localhost\\SQLEXPRESS -d HRMS -E -i insert_data.sql"
+      "command": "sqlcmd -S localhost,1433 -U sa -P 'YourStrong!Passw0rd' -d HRMS -i insert_data.sql"
     },
     {
       "label": "Full Reset (Reset + Schema + Insert)",

@@ -1,0 +1,72 @@
+@model HRMS_M3.Areas.Employee.Models.EmployeeEditViewModel
+
+@{
+    ViewData["Title"] = "Edit Profile";
+}
+
+<div class="container mt-4">
+    <div class="card shadow-sm">
+        <div class="card-header bg-primary text-white">
+            <h4 class="mb-0">Edit Profile</h4>
+        </div>
+
+        <div class="card-body">
+            <form asp-action="Edit" asp-area="Employee" asp-controller="Employee" method="post" enctype="multipart/form-data">
+
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label asp-for="First_Name" class="form-label"></label>
+                        <input asp-for="First_Name" class="form-control" />
+                    </div>
+
+                    <div class="col-md-6">
+                        <label asp-for="Last_Name" class="form-label"></label>
+                        <input asp-for="Last_Name" class="form-control" />
+                    </div>
+
+                    <div class="col-md-6">
+                        <label asp-for="Email" class="form-label"></label>
+                        <input asp-for="Email" class="form-control" />
+                    </div>
+
+                    <div class="col-md-6">
+                        <label asp-for="Phone" class="form-label"></label>
+                        <input asp-for="Phone" class="form-control" />
+                    </div>
+
+                    <div class="col-md-12">
+                        <label asp-for="Address" class="form-label"></label>
+                        <input asp-for="Address" class="form-control" />
+                    </div>
+
+                    <div class="col-md-6">
+                        <label asp-for="Emergency_Contact_Name" class="form-label"></label>
+                        <input asp-for="Emergency_Contact_Name" class="form-control" />
+                    </div>
+
+                    <div class="col-md-6">
+                        <label asp-for="Emergency_Contact_Phone" class="form-label"></label>
+                        <input asp-for="Emergency_Contact_Phone" class="form-control" />
+                    </div>
+
+                    <div class="col-md-12">
+                        <label asp-for="ProfileImageFile" class="form-label">Profile Picture</label>
+                        <input asp-for="ProfileImageFile" type="file" class="form-control" />
+                    </div>
+
+                    <input type="hidden" asp-for="Employee_Id" />
+                </div>
+
+                <div class="mt-4 d-flex justify-content-between">
+                    <a href="@Url.Action("Details", "Employee", new { area = "Employee", id = Model.Employee_Id })" class="btn btn-secondary">
+                        Cancel
+                    </a>
+                    <button type="submit" class="btn btn-primary px-4">
+                        Save Changes
+                    </button>
+                </div>
+
+            </form>
+        </div>
+    </div>
+</div>

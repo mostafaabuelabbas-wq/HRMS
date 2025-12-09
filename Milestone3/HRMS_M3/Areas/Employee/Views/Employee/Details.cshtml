@@ -1,0 +1,75 @@
+
+
+@model HRMS_M3.Areas.Employee.Models.EmployeeDto
+@{
+    ViewData["Title"] = "Employee Profile";
+}
+
+<div class="container mt-4 border border-danger p-5">
+
+    <div class="row">
+        
+        <!-- Left Side -->
+        <div class="col-md-4">
+            <div class="card shadow-sm">
+                <img src="@(!string.IsNullOrEmpty(Model.Profile_Image) 
+                        ? Model.Profile_Image 
+                        : "/images/avatar-placeholder.png")"
+                     class="card-img-top img-fluid" />
+
+                <div class="card-body text-center">
+                    <h3>@Model.Full_Name</h3>
+                    <p class="text-muted">@Model.Position_Title</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Side -->
+        <div class="col-md-8">
+            <div class="card shadow-sm p-4">
+
+                <h4 class="mb-3">Employee Information</h4>
+
+                <table class="table">
+                    <tr>
+                        <th>Email</th>
+                        <td>@Model.Email</td>
+                    </tr>
+                    <tr>
+                        <th>Phone</th>
+                        <td>@Model.Phone</td>
+                    </tr>
+                    <tr>
+                        <th>Department</th>
+                        <td>@Model.Department_Name</td>
+                    </tr>
+                    <tr>
+                        <th>Address</th>
+                        <td>@Model.Address</td>
+                    </tr>
+                    <tr>
+                        <th>Emergency Contact</th>
+                        <td>
+                            @Model.Emergency_Contact_Name <br />
+                            @Model.Emergency_Contact_Phone
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>Hire Date</th>
+                        <td>@Model.Hire_Date?.ToString("yyyy-MM-dd")</td>
+                    </tr>
+                    <tr>
+                        <th>Status</th>
+                        <td>@Model.Employment_Status</td>
+                    </tr>
+                </table>
+
+                <a href="@Url.Action("Edit", "Employee", new { id = Model.Employee_Id })"
+                   class="btn btn-primary mt-3">
+                    Edit Profile
+                </a>
+            </div>
+        </div>
+
+    </div>
+</div>

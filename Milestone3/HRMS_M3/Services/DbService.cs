@@ -22,4 +22,5 @@ public class DbService
         using var conn = new SqlConnection(_config.GetConnectionString("HRMS"));
         return await conn.ExecuteAsync(proc, parameters, commandType: CommandType.StoredProcedure);
     }
+    
 }

@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "GsT+VfYm388=",
+  "dgSpecHash": "+YAXOfXuGEo=",
   "success": true,
-  "projectFilePath": "C:\\Users\\mosta\\OneDrive\\Desktop\\HRMS vs\\HRMS_M3_VS\\HRMS_M3_VS\\HRMS_M3_VS.csproj",
+  "projectFilePath": "C:\\Users\\mosta\\OneDrive\\Documents\\GitHub\\HRMS\\Milestone3\\HRMS_M3_VS\\HRMS_M3_VS\\HRMS_M3_VS.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\mosta\\.nuget\\packages\\azure.core\\1.47.1\\azure.core.1.47.1.nupkg.sha512",
     "C:\\Users\\mosta\\.nuget\\packages\\azure.identity\\1.14.2\\azure.identity.1.14.2.nupkg.sha512",

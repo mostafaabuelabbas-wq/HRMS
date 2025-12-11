@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Users\\mosta\\OneDrive\\Desktop\\HRMS vs\\HRMS_M3_VS\\HRMS_M3_VS\\HRMS_M3_VS.csproj": {}
+    "C:\\Users\\mosta\\OneDrive\\Documents\\GitHub\\HRMS\\Milestone3\\HRMS_M3_VS\\HRMS_M3_VS\\HRMS_M3_VS.csproj": {}
   },
   "projects": {
-    "C:\\Users\\mosta\\OneDrive\\Desktop\\HRMS vs\\HRMS_M3_VS\\HRMS_M3_VS\\HRMS_M3_VS.csproj": {
+    "C:\\Users\\mosta\\OneDrive\\Documents\\GitHub\\HRMS\\Milestone3\\HRMS_M3_VS\\HRMS_M3_VS\\HRMS_M3_VS.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\mosta\\OneDrive\\Desktop\\HRMS vs\\HRMS_M3_VS\\HRMS_M3_VS\\HRMS_M3_VS.csproj",
+        "projectUniqueName": "C:\\Users\\mosta\\OneDrive\\Documents\\GitHub\\HRMS\\Milestone3\\HRMS_M3_VS\\HRMS_M3_VS\\HRMS_M3_VS.csproj",
         "projectName": "HRMS_M3_VS",
-        "projectPath": "C:\\Users\\mosta\\OneDrive\\Desktop\\HRMS vs\\HRMS_M3_VS\\HRMS_M3_VS\\HRMS_M3_VS.csproj",
+        "projectPath": "C:\\Users\\mosta\\OneDrive\\Documents\\GitHub\\HRMS\\Milestone3\\HRMS_M3_VS\\HRMS_M3_VS\\HRMS_M3_VS.csproj",
         "packagesPath": "C:\\Users\\mosta\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\mosta\\OneDrive\\Desktop\\HRMS vs\\HRMS_M3_VS\\HRMS_M3_VS\\obj\\",
+        "outputPath": "C:\\Users\\mosta\\OneDrive\\Documents\\GitHub\\HRMS\\Milestone3\\HRMS_M3_VS\\HRMS_M3_VS\\obj\\",
         "projectStyle": "PackageReference",
         "fallbackFolders": [
           "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"

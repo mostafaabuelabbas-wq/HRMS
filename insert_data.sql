@@ -484,19 +484,15 @@ INSERT INTO Reimbursement (type, claim_type, approval_date, current_status, empl
 VALUES
     ('Training', 'Course Fee', NULL, 'Pending', 3); -- Mohamed
 
+INSERT INTO Attendance (employee_id, shift_id, entry_time, exit_time, login_method, logout_method, exception_id)
+VALUES (1, 1, NULL, '2024-02-10 17:00', 'Device', 'Device', NULL);
 
+INSERT INTO Attendance (employee_id, shift_id, entry_time, exit_time, login_method, logout_method, exception_id)
+VALUES (1, 1, NULL, '2024-03-10 17:00', 'Device', 'Device', NULL);
 
-
-
-
-
-
-
-
-
-
-
-
+INSERT INTO LeaveRequest (employee_id, leave_id, justification, duration, approval_timing, status)
+VALUES
+(1, 1, 'Testing positive sync', 2, '2024-02-15', 'Approved');
 
 
 

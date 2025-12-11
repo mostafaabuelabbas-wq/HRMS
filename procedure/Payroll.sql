@@ -9,25 +9,80 @@ AS
 BEGIN
     SET NOCOUNT ON;
 
+    ---------------------------------------------------------
+    -- 1. Validate input dates
+    ---------------------------------------------------------
+    IF @StartDate IS NULL OR @EndDate IS NULL
+    BEGIN
+        SELECT 'Error: Start and end dates are required.' AS Message;
+        RETURN;
+    END;
+
+    IF @StartDate > @EndDate
+    BEGIN
+        SELECT 'Error: Start date cannot be after end date.' AS Message;
+        RETURN;
+    END;
+
+    ---------------------------------------------------------
+    -- 2. Generate payroll calculations
+    ---------------------------------------------------------
     SELECT 
         e.employee_id,
         e.full_name,
-        e.department_id,
+        d.department_name,
         pg.grade_name,
         pg.min_salary AS base_amount,
-        0.00 AS taxes,
-        0.00 AS adjustments,
-        0.00 AS contributions,
-        pg.min_salary AS actual_pay,
-        pg.min_salary AS net_salary,
+
+        -----------------------------------------------------
+        -- Taxes (simple demo formula: 10%)
+        -----------------------------------------------------
+        (pg.min_salary * 0.10) AS taxes,
+
+        -----------------------------------------------------
+        -- Additions/deductions during period
+        -----------------------------------------------------
+        ISNULL((
+            SELECT SUM(ad.amount)
+            FROM AllowanceDeduction ad
+            WHERE ad.employee_id = e.employee_id
+        ), 0) AS adjustments,
+
+        -----------------------------------------------------
+        -- Contributions (simple demo formula: 5%)
+        -----------------------------------------------------
+        (pg.min_salary * 0.05) AS contributions,
+
+        -----------------------------------------------------
+        -- actual_pay = base + adjustments
+        -----------------------------------------------------
+        (pg.min_salary 
+            + ISNULL((SELECT SUM(ad.amount)
+                      FROM AllowanceDeduction ad
+                      WHERE ad.employee_id = e.employee_id),0)
+        ) AS actual_pay,
+
+        -----------------------------------------------------
+        -- net_salary = actual_pay - taxes - contributions
+        -----------------------------------------------------
+        (
+            (pg.min_salary 
+                + ISNULL((SELECT SUM(ad.amount)
+                        FROM AllowanceDeduction ad
+                        WHERE ad.employee_id = e.employee_id),0)
+            )
+            - (pg.min_salary * 0.10)
+            - (pg.min_salary * 0.05)
+        ) AS net_salary,
+
         @StartDate AS period_start,
         @EndDate AS period_end,
         GETDATE() AS payment_date
     FROM Employee e
-    INNER JOIN PayGrade pg 
-        ON e.pay_grade = pg.pay_grade_id
+    INNER JOIN PayGrade pg ON e.pay_grade = pg.pay_grade_id
+    LEFT JOIN Department d ON e.department_id = d.department_id
     WHERE e.is_active = 1
-      AND e.account_status = 'Active';  -- ✔ THIS FIXES THE EMPTY RESULT
+      AND e.account_status = 'Active';
 END;
 GO
 

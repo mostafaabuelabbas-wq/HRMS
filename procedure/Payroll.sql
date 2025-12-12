@@ -991,11 +991,56 @@ CREATE PROCEDURE DefinePayGrades
     @CreatedBy INT
 AS
 BEGIN
+    SET NOCOUNT ON;
+
+    -- Validate grade name
+    IF (@GradeName IS NULL OR LTRIM(RTRIM(@GradeName)) = '')
+    BEGIN
+        SELECT 'Error: Grade name is required.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Validate salary range
+    IF (@MinSalary >= @MaxSalary)
+    BEGIN
+        SELECT 'Error: Minimum salary must be less than maximum salary.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Validate CreatedBy
+    IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @CreatedBy)
+    BEGIN
+        SELECT 'Error: CreatedBy employee does not exist.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Prevent duplicates
+    IF EXISTS (SELECT 1 FROM PayGrade WHERE grade_name = @GradeName)
+    BEGIN
+        SELECT 'Error: Pay grade already exists.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Insert Pay Grade
     INSERT INTO PayGrade (grade_name, min_salary, max_salary)
     VALUES (@GradeName, @MinSalary, @MaxSalary);
 
+    -- Get ANY valid payroll_id (most recent)
+    DECLARE @ValidPayrollID INT;
+    SELECT TOP 1 @ValidPayrollID = payroll_id
+    FROM Payroll
+    ORDER BY payroll_id DESC;
+
+    -- Safety check
+    IF @ValidPayrollID IS NULL
+    BEGIN
+        SELECT 'Error: No payroll records exist, cannot insert log due to schema constraint.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Insert log with VALID payroll_id
     INSERT INTO Payroll_Log (payroll_id, actor, modification_type)
-    VALUES (NULL, @CreatedBy, 'Pay Grade Defined: ' + @GradeName);
+    VALUES (@ValidPayrollID, @CreatedBy, 'Pay Grade Defined: ' + @GradeName);
 
     SELECT 'Pay grade defined successfully: ' + @GradeName AS ConfirmationMessage;
 END;
@@ -1009,26 +1054,54 @@ CREATE PROCEDURE ConfigureEscalationWorkflow
     @CreatedBy INT
 AS
 BEGIN
-    IF EXISTS (SELECT 1 FROM Role WHERE role_name = @ApproverRole)
-    BEGIN
-        INSERT INTO ApprovalWorkflow (workflow_type, threshold_amount, approver_role, created_by, status)
-        SELECT 
-            'Payroll Escalation',
-            @ThresholdAmount,
-            r.role_id,
-            @CreatedBy,
-            'Active'
-        FROM Role r
-        WHERE r.role_name = @ApproverRole;
+    SET NOCOUNT ON;
 
-        SELECT 'Escalation workflow configured successfully for amounts exceeding ' + CAST(@ThresholdAmount AS VARCHAR(20)) AS ConfirmationMessage;
-    END
-    ELSE
+    -- Validate threshold amount
+    IF @ThresholdAmount <= 0
     BEGIN
-        SELECT 'Error: Approver role not found' AS ConfirmationMessage;
-    END
+        SELECT 'Error: Threshold amount must be greater than zero.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Validate approver role exists
+    IF NOT EXISTS (SELECT 1 FROM Role WHERE role_name = @ApproverRole)
+    BEGIN
+        SELECT 'Error: Approver role not found.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Validate CreatedBy exists
+    IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @CreatedBy)
+    BEGIN
+        SELECT 'Error: CreatedBy employee does not exist.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    DECLARE @RoleID INT;
+    SELECT @RoleID = role_id FROM Role WHERE role_name = @ApproverRole;
+
+    -- Prevent duplicate workflows for same role & threshold
+    IF EXISTS (
+        SELECT 1 FROM ApprovalWorkflow
+        WHERE workflow_type = 'Payroll Escalation'
+          AND approver_role = @RoleID
+          AND threshold_amount = @ThresholdAmount
+    )
+    BEGIN
+        SELECT 'Error: This escalation workflow is already defined.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Insert escalation workflow
+    INSERT INTO ApprovalWorkflow (workflow_type, threshold_amount, approver_role, created_by, status)
+    VALUES ('Payroll Escalation', @ThresholdAmount, @RoleID, @CreatedBy, 'Active');
+
+    SELECT 'Escalation workflow configured successfully for threshold ' 
+           + CAST(@ThresholdAmount AS VARCHAR(20)) AS ConfirmationMessage;
 END;
 GO
+
+
 -- 26. DefinePayType
 CREATE PROCEDURE DefinePayType
     @EmployeeID INT,
@@ -1036,33 +1109,79 @@ CREATE PROCEDURE DefinePayType
     @EffectiveDate DATE
 AS
 BEGIN
-    DECLARE @SalaryTypeID INT;
+    SET NOCOUNT ON;
 
+    DECLARE @SalaryTypeID INT,
+            @CurrencyCode VARCHAR(10),
+            @ValidPayrollID INT;
+
+    -- Validate employee exists
+    IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @EmployeeID)
+    BEGIN
+        SELECT 'Error: Employee not found.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Validate pay type
+    IF (@PayType IS NULL OR LTRIM(RTRIM(@PayType)) = '')
+    BEGIN
+        SELECT 'Error: Pay type is required.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Validate EffectiveDate
+    IF @EffectiveDate IS NULL
+    BEGIN
+        SELECT 'Error: Effective date is required.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Get employee's existing currency
+    SELECT TOP 1 @CurrencyCode = st.currency_code
+    FROM Employee e
+    JOIN SalaryType st ON e.salary_type_id = st.salary_type_id
+    WHERE e.employee_id = @EmployeeID;
+
+    IF @CurrencyCode IS NULL
+        SET @CurrencyCode = 'USD'; -- fallback, but normally won't happen
+
+    -- Check if pay type exists
     IF EXISTS (SELECT 1 FROM SalaryType WHERE type = @PayType)
     BEGIN
         SELECT @SalaryTypeID = salary_type_id FROM SalaryType WHERE type = @PayType;
-        
-        UPDATE Employee
-        SET salary_type_id = @SalaryTypeID
-        WHERE employee_id = @EmployeeID;
-
-        SELECT 'Pay type defined successfully for employee ' + CAST(@EmployeeID AS VARCHAR(10)) AS ConfirmationMessage;
     END
     ELSE
     BEGIN
         INSERT INTO SalaryType (type, payment_frequency, currency_code)
-        VALUES (@PayType, 'Standard', 'USD');
+        VALUES (@PayType, 'Standard', @CurrencyCode);
 
         SET @SalaryTypeID = SCOPE_IDENTITY();
-        
-        UPDATE Employee
-        SET salary_type_id = @SalaryTypeID
-        WHERE employee_id = @EmployeeID;
+    END;
 
-        SELECT 'New pay type created and assigned to employee ' + CAST(@EmployeeID AS VARCHAR(10)) AS ConfirmationMessage;
-    END
+    -- Assign pay type to employee
+    UPDATE Employee
+    SET salary_type_id = @SalaryTypeID
+    WHERE employee_id = @EmployeeID;
+
+    -- Get valid payroll ID for logging (cannot insert NULL due to FK)
+    SELECT TOP 1 @ValidPayrollID = payroll_id
+    FROM Payroll
+    ORDER BY payroll_id DESC;
+
+    IF @ValidPayrollID IS NOT NULL
+    BEGIN
+        INSERT INTO Payroll_Log (payroll_id, actor, modification_type)
+        VALUES (
+            @ValidPayrollID,
+            @EmployeeID,
+            'Pay Type Changed to ' + @PayType + ' (Effective ' + CAST(@EffectiveDate AS VARCHAR(20)) + ')'
+        );
+    END;
+
+    SELECT 'Pay type defined successfully for employee ' + CAST(@EmployeeID AS VARCHAR(10)) AS ConfirmationMessage;
 END;
 GO
+
 
 -- 27. ConfigureOvertimeRules
 CREATE PROCEDURE ConfigureOvertimeRules
@@ -1071,23 +1190,66 @@ CREATE PROCEDURE ConfigureOvertimeRules
     @HoursPerMonth INT
 AS
 BEGIN
+    SET NOCOUNT ON;
+
     DECLARE @PolicyID INT;
 
+    -- Validate DayType
+    IF (@DayType NOT IN ('Weekday', 'Weekend'))
+    BEGIN
+        SELECT 'Error: DayType must be either Weekday or Weekend.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Validate multiplier
+    IF (@Multiplier <= 0)
+    BEGIN
+        SELECT 'Error: Multiplier must be greater than zero.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Validate hours
+    IF (@HoursPerMonth <= 0)
+    BEGIN
+        SELECT 'Error: HoursPerMonth must be greater than zero.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Prevent duplication
+    IF EXISTS (
+        SELECT 1 FROM OvertimePolicy op
+        JOIN PayrollPolicy pp ON op.policy_id = pp.policy_id
+        WHERE pp.type = 'Overtime'
+          AND pp.description LIKE '%DayType: ' + @DayType + '%'
+          AND (
+                (op.weekday_rate_multiplier = @Multiplier AND @DayType = 'Weekday') OR
+                (op.weekend_rate_multiplier = @Multiplier AND @DayType = 'Weekend')
+              )
+    )
+    BEGIN
+        SELECT 'Error: This overtime rule already exists.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Insert new payroll policy
     INSERT INTO PayrollPolicy (effective_date, [type], [description])
     VALUES (GETDATE(), 'Overtime', 'DayType: ' + @DayType + ' | Multiplier: ' + CAST(@Multiplier AS VARCHAR(10)));
 
     SET @PolicyID = SCOPE_IDENTITY();
 
+    -- Insert overtime rule
     INSERT INTO OvertimePolicy (policy_id, weekday_rate_multiplier, weekend_rate_multiplier, max_hours_per_month)
     VALUES (
         @PolicyID,
         CASE WHEN @DayType = 'Weekday' THEN @Multiplier ELSE 1.0 END,
         CASE WHEN @DayType = 'Weekend' THEN @Multiplier ELSE 1.5 END,
-        @HoursPerMonth);
+        @HoursPerMonth
+    );
 
     SELECT 'Overtime rule configured successfully for ' + @DayType AS ConfirmationMessage;
 END;
 GO
+
 
 -- 28. ConfigureShiftAllowance  (DUMMY – prefer to model in schema first)
 CREATE PROCEDURE ConfigureShiftAllowance
@@ -1096,19 +1258,74 @@ CREATE PROCEDURE ConfigureShiftAllowance
     @CreatedBy INT
 AS
 BEGIN
+    SET NOCOUNT ON;
+
+    -- Validate ShiftType
+    IF (@ShiftType IS NULL OR LTRIM(RTRIM(@ShiftType)) = '')
+    BEGIN
+        SELECT 'Error: ShiftType is required.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Validate Amount
+    IF (@AllowanceAmount <= 0)
+    BEGIN
+        SELECT 'Error: Allowance amount must be greater than zero.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Validate CreatedBy
+    IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @CreatedBy)
+    BEGIN
+        SELECT 'Error: CreatedBy employee does not exist.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Prevent duplicate policy
+    IF EXISTS (
+        SELECT 1 FROM PayrollPolicy
+        WHERE [type] = 'Shift Allowance'
+        AND [description] = @ShiftType + ' Shift: ' + CAST(@AllowanceAmount AS VARCHAR(20)) + ' allowance'
+    )
+    BEGIN
+        SELECT 'Error: This shift allowance policy already exists.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Insert policy
     INSERT INTO PayrollPolicy (effective_date, [type], [description])
     VALUES (
-        GETDATE(), 
+        GETDATE(),
         'Shift Allowance',
         @ShiftType + ' Shift: ' + CAST(@AllowanceAmount AS VARCHAR(20)) + ' allowance'
     );
 
-    INSERT INTO Payroll_Log (payroll_id, actor, modification_type)
-    VALUES (NULL, @CreatedBy, 'Shift Allowance Policy Created: ' + @ShiftType);
+    DECLARE @PolicyID INT = SCOPE_IDENTITY();
 
-    SELECT 'Shift allowance policy configured successfully for ' + @ShiftType + ' shifts' AS ConfirmationMessage;
+    -- Get valid payroll_id for logging
+    DECLARE @ValidPayrollID INT;
+    SELECT TOP 1 @ValidPayrollID = payroll_id
+    FROM Payroll
+    ORDER BY payroll_id DESC;
+
+    IF @ValidPayrollID IS NULL
+    BEGIN
+        SELECT 'Error: No payroll records exist. Cannot log the operation.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Insert log
+    INSERT INTO Payroll_Log (payroll_id, actor, modification_type)
+    VALUES (
+        @ValidPayrollID,
+        @CreatedBy,
+        'Shift Allowance Policy Created: ' + @ShiftType
+    );
+
+    SELECT 'Shift allowance policy configured successfully for ' + @ShiftType + ' shifts.' AS ConfirmationMessage;
 END;
 GO
+
 
 -- 30. ConfigureSigningBonusPolicy
 CREATE PROCEDURE ConfigureSigningBonusPolicy
@@ -1117,19 +1334,73 @@ CREATE PROCEDURE ConfigureSigningBonusPolicy
     @EligibilityCriteria NVARCHAR(MAX)
 AS
 BEGIN
-    DECLARE @PolicyID INT;
+    SET NOCOUNT ON;
 
+    DECLARE @PolicyID INT,
+            @ValidPayrollID INT;
+
+    -- Validate BonusType
+    IF (@BonusType IS NULL OR LTRIM(RTRIM(@BonusType)) = '')
+    BEGIN
+        SELECT 'Error: Bonus type is required.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Validate Amount
+    IF (@Amount <= 0)
+    BEGIN
+        SELECT 'Error: Amount must be greater than zero.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Validate EligibilityCriteria
+    IF (@EligibilityCriteria IS NULL OR LTRIM(RTRIM(@EligibilityCriteria)) = '')
+    BEGIN
+        SELECT 'Error: Eligibility criteria is required.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Prevent duplicate signing bonus policies
+    IF EXISTS (
+        SELECT 1
+        FROM PayrollPolicy
+        WHERE [type] = 'Signing Bonus'
+          AND [description] = @BonusType + ': ' + CAST(@Amount AS VARCHAR(20))
+    )
+    BEGIN
+        SELECT 'Error: This signing bonus policy already exists.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Insert main payroll policy record
     INSERT INTO PayrollPolicy (effective_date, [type], [description])
     VALUES (GETDATE(), 'Signing Bonus', @BonusType + ': ' + CAST(@Amount AS VARCHAR(20)));
 
     SET @PolicyID = SCOPE_IDENTITY();
 
+    -- Insert into BonusPolicy table
     INSERT INTO BonusPolicy (policy_id, bonus_type, eligibility_criteria)
     VALUES (@PolicyID, @BonusType, @EligibilityCriteria);
+
+    -- Get a valid payroll_id for logging
+    SELECT TOP 1 @ValidPayrollID = payroll_id
+    FROM Payroll
+    ORDER BY payroll_id DESC;
+
+    IF @ValidPayrollID IS NOT NULL
+    BEGIN
+        INSERT INTO Payroll_Log (payroll_id, actor, modification_type)
+        VALUES (
+            @ValidPayrollID,
+            NULL,     -- No employee is making the request; this is a config-level change
+            'Signing Bonus Policy Created: ' + @BonusType
+        );
+    END;
 
     SELECT 'Signing bonus policy configured successfully for ' + @BonusType AS ConfirmationMessage;
 END;
 GO
+
 
 -- 32. GenerateTaxStatement
 CREATE PROCEDURE GenerateTaxStatement
@@ -1137,50 +1408,131 @@ CREATE PROCEDURE GenerateTaxStatement
     @TaxYear INT
 AS
 BEGIN
-    SELECT 
+    SET NOCOUNT ON;
+
+    SELECT
         e.employee_id,
         e.full_name,
         @TaxYear AS tax_year,
-        SUM(p.base_amount) AS total_gross_income,
-        SUM(p.adjustments) AS total_adjustments,
-        SUM(p.taxes) AS total_taxes_paid,
-        SUM(p.contributions) AS total_contributions,
-        SUM(p.net_salary) AS total_net_income,
-        ISNULL(SUM(ad.amount), 0) AS total_allowances_deductions,
+
+        -- Payroll-based totals (correct)
+        (
+            SELECT SUM(base_amount)
+            FROM Payroll
+            WHERE employee_id = @EmployeeID
+              AND YEAR(period_start) = @TaxYear
+        ) AS total_gross_income,
+
+        (
+            SELECT SUM(adjustments)
+            FROM Payroll
+            WHERE employee_id = @EmployeeID
+              AND YEAR(period_start) = @TaxYear
+        ) AS total_adjustments,
+
+        (
+            SELECT SUM(taxes)
+            FROM Payroll
+            WHERE employee_id = @EmployeeID
+              AND YEAR(period_start) = @TaxYear
+        ) AS total_taxes_paid,
+
+        (
+            SELECT SUM(contributions)
+            FROM Payroll
+            WHERE employee_id = @EmployeeID
+              AND YEAR(period_start) = @TaxYear
+        ) AS total_contributions,
+
+        (
+            SELECT SUM(net_salary)
+            FROM Payroll
+            WHERE employee_id = @EmployeeID
+              AND YEAR(period_start) = @TaxYear
+        ) AS total_net_income,
+
+        -- Allowances/deductions correctly filtered by payroll_id
+        (
+            SELECT SUM(ad.amount)
+            FROM AllowanceDeduction ad
+            JOIN Payroll p ON ad.payroll_id = p.payroll_id
+            WHERE p.employee_id = @EmployeeID
+              AND YEAR(p.period_start) = @TaxYear
+        ) AS total_allowances_deductions,
+
         tf.jurisdiction,
         tf.form_content AS tax_form_details
     FROM Employee e
-    INNER JOIN Payroll p ON e.employee_id = p.employee_id
     LEFT JOIN TaxForm tf ON e.tax_form_id = tf.tax_form_id
-    LEFT JOIN AllowanceDeduction ad ON e.employee_id = ad.employee_id
-    WHERE e.employee_id = @EmployeeID
-        AND YEAR(p.period_start) = @TaxYear
-    GROUP BY e.employee_id, e.full_name, tf.jurisdiction, tf.form_content;
+    WHERE e.employee_id = @EmployeeID;
 END;
 GO
+
+
 -- 33. ApprovePayrollConfiguration  (recheck)
 CREATE PROCEDURE ApprovePayrollConfiguration
     @ConfigID INT,
     @ApprovedBy INT
 AS
 BEGIN
-    IF EXISTS (SELECT 1 FROM ApprovalWorkflow WHERE workflow_id = @ConfigID)
-    BEGIN
-        UPDATE ApprovalWorkflow
-        SET status = 'Approved'
-        WHERE workflow_id = @ConfigID;
+    SET NOCOUNT ON;
 
-        INSERT INTO Payroll_Log (payroll_id, actor, modification_type)
-        VALUES (NULL, @ApprovedBy, 'Configuration Approved: ConfigID ' + CAST(@ConfigID AS VARCHAR(10)));
+    DECLARE @ValidPayrollID INT;
 
-        SELECT 'Payroll configuration approved successfully' AS ConfirmationMessage;
-    END
-    ELSE
+    -- Validate configuration record
+    IF NOT EXISTS (SELECT 1 FROM ApprovalWorkflow WHERE workflow_id = @ConfigID)
     BEGIN
-        SELECT 'Error: Configuration not found' AS ConfirmationMessage;
-    END
+        SELECT 'Error: Configuration not found.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Prevent re-approvals
+    IF EXISTS (
+        SELECT 1 FROM ApprovalWorkflow 
+        WHERE workflow_id = @ConfigID
+          AND status = 'Approved'
+    )
+    BEGIN
+        SELECT 'Error: Configuration already approved.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Validate Approver
+    IF NOT EXISTS (SELECT 1 FROM Employee WHERE employee_id = @ApprovedBy)
+    BEGIN
+        SELECT 'Error: Approver not found.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Approve configuration
+    UPDATE ApprovalWorkflow
+    SET status = 'Approved'
+    WHERE workflow_id = @ConfigID;
+
+    -- Get valid payroll_id for logging
+    SELECT TOP 1 @ValidPayrollID = payroll_id
+    FROM Payroll
+    ORDER BY payroll_id DESC;
+
+    IF @ValidPayrollID IS NULL
+    BEGIN
+        SELECT 'Error: No payroll records exist for logging.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -- Log approval
+    INSERT INTO Payroll_Log (payroll_id, actor, modification_type)
+    VALUES (
+        @ValidPayrollID,
+        @ApprovedBy,
+        'Payroll Configuration Approved (ConfigID = ' + CAST(@ConfigID AS VARCHAR(10)) + ')'
+    );
+
+    SELECT 'Payroll configuration approved successfully.' AS ConfirmationMessage;
 END;
 GO
+
+
 -- 34. ModifyPastPayroll
 CREATE PROCEDURE ModifyPastPayroll
     @PayrollRunID INT,
@@ -1190,45 +1542,93 @@ CREATE PROCEDURE ModifyPastPayroll
     @ModifiedBy INT
 AS
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM Payroll WHERE payroll_id = @PayrollRunID AND employee_id = @EmployeeID)
+    SET NOCOUNT ON;
+
+    -----------------------------------------------------
+    -- Validate payroll record exists
+    -----------------------------------------------------
+    IF NOT EXISTS (
+        SELECT 1 FROM Payroll 
+        WHERE payroll_id = @PayrollRunID 
+          AND employee_id = @EmployeeID
+    )
     BEGIN
-        SELECT 'Error: Payroll record not found' AS ConfirmationMessage;
+        SELECT 'Error: Payroll record not found.' AS ConfirmationMessage;
         RETURN;
     END;
 
+    -----------------------------------------------------
+    -- Validate modifier exists
+    -----------------------------------------------------
+    IF NOT EXISTS (
+        SELECT 1 FROM Employee WHERE employee_id = @ModifiedBy
+    )
+    BEGIN
+        SELECT 'Error: ModifiedBy employee not found.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -----------------------------------------------------
+    -- Validate NewValue
+    -----------------------------------------------------
+    IF @NewValue < 0
+    BEGIN
+        SELECT 'Error: New value cannot be negative.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -----------------------------------------------------
+    -- Normalize field name (case-insensitive)
+    -----------------------------------------------------
+    SET @FieldName = LOWER(LTRIM(RTRIM(@FieldName)));
+
+    -----------------------------------------------------
+    -- Validate field name
+    -----------------------------------------------------
+    IF @FieldName NOT IN (
+        'base_amount', 'adjustments', 'taxes', 
+        'contributions', 'actual_pay', 'net_salary'
+    )
+    BEGIN
+        SELECT 'Error: Invalid field name.' AS ConfirmationMessage;
+        RETURN;
+    END;
+
+    -----------------------------------------------------
+    -- Perform update dynamically and safely
+    -----------------------------------------------------
     IF @FieldName = 'base_amount'
-    BEGIN
         UPDATE Payroll SET base_amount = @NewValue WHERE payroll_id = @PayrollRunID AND employee_id = @EmployeeID;
-    END
+
     ELSE IF @FieldName = 'adjustments'
-    BEGIN
         UPDATE Payroll SET adjustments = @NewValue WHERE payroll_id = @PayrollRunID AND employee_id = @EmployeeID;
-    END
+
     ELSE IF @FieldName = 'taxes'
-    BEGIN
         UPDATE Payroll SET taxes = @NewValue WHERE payroll_id = @PayrollRunID AND employee_id = @EmployeeID;
-    END
+
     ELSE IF @FieldName = 'contributions'
-    BEGIN
         UPDATE Payroll SET contributions = @NewValue WHERE payroll_id = @PayrollRunID AND employee_id = @EmployeeID;
-    END
+
     ELSE IF @FieldName = 'actual_pay'
-    BEGIN
         UPDATE Payroll SET actual_pay = @NewValue WHERE payroll_id = @PayrollRunID AND employee_id = @EmployeeID;
-    END
+
     ELSE IF @FieldName = 'net_salary'
-    BEGIN
         UPDATE Payroll SET net_salary = @NewValue WHERE payroll_id = @PayrollRunID AND employee_id = @EmployeeID;
-    END
-    ELSE
-    BEGIN
-        SELECT 'Error: Invalid field name' AS ConfirmationMessage;
-        RETURN;
-    END;
 
+    -----------------------------------------------------
+    -- Insert log entry
+    -----------------------------------------------------
     INSERT INTO Payroll_Log (payroll_id, actor, modification_type)
-    VALUES (@PayrollRunID, @ModifiedBy, 'Modified ' + @FieldName + ' to ' + CAST(@NewValue AS VARCHAR(20)));
+    VALUES (
+        @PayrollRunID,
+        @ModifiedBy,
+        'Modified ' + @FieldName + ' to ' + CAST(@NewValue AS VARCHAR(20))
+    );
 
-    SELECT 'Payroll entry modified successfully for employee ' + CAST(@EmployeeID AS VARCHAR(10)) AS ConfirmationMessage;
+    -----------------------------------------------------
+    -- Return success
+    -----------------------------------------------------
+    SELECT 'Payroll entry modified successfully for employee ' 
+            + CAST(@EmployeeID AS VARCHAR(10)) AS ConfirmationMessage;
 END;
 GO

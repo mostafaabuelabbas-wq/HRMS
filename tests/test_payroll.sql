@@ -322,4 +322,219 @@ EXEC UpdateInsuranceBrackets
     @PolicyDetails = 'Duplicate Policy Attempt',
     @EffectiveDate = '2024-05-01';
 
-    */
+    
+
+
+  
+SELECT * FROM PayGrade WHERE grade_name = 'Executive';
+
+EXEC DefinePayGrades
+    @GradeName = 'Executive',
+    @MinSalary = 40000,
+    @MaxSalary = 70000,
+    @CreatedBy = 1;
+
+   SELECT * FROM PayGrade WHERE grade_name = 'Executive';
+SELECT * FROM Payroll_Log WHERE modification_type LIKE '%Executive%';
+ 
+  
+
+  SELECT * FROM ApprovalWorkflow WHERE workflow_type = 'Payroll Escalation';
+
+  EXEC ConfigureEscalationWorkflow
+    @ThresholdAmount = 5000,
+    @ApproverRole = 'HRAdmin',
+    @CreatedBy = 1;
+
+    SELECT workflow_type, threshold_amount, approver_role, created_by, status
+FROM ApprovalWorkflow
+WHERE workflow_type = 'Payroll Escalation';
+
+EXEC ConfigureEscalationWorkflow
+    @ThresholdAmount = 5000,
+    @ApproverRole = 'HRAdmin',
+    @CreatedBy = 1;
+
+EXEC ConfigureEscalationWorkflow
+    @ThresholdAmount = 5000,
+    @ApproverRole = 'HRAdmin',
+    @CreatedBy = 9999;
+
+    
+
+SELECT employee_id, salary_type_id
+FROM Employee
+WHERE employee_id = 1;
+
+SELECT * 
+FROM SalaryType 
+WHERE type = 'Daily';
+
+SELECT * 
+FROM Payroll_Log 
+WHERE modification_type LIKE '%Pay Type Changed%';
+
+EXEC DefinePayType
+    @EmployeeID = 1,
+    @PayType = 'Daily',
+    @EffectiveDate = '2024-04-01';
+
+    SELECT employee_id, salary_type_id
+FROM Employee
+WHERE employee_id = 1;
+
+SELECT * 
+FROM SalaryType 
+WHERE type = 'Daily';
+
+SELECT payroll_id, actor, modification_type
+FROM Payroll_Log 
+WHERE modification_type LIKE '%Daily%';
+
+
+SELECT * FROM PayrollPolicy WHERE type = 'Overtime';
+SELECT * FROM OvertimePolicy;
+
+EXEC ConfigureOvertimeRules
+    @DayType = 'Weekday',
+    @Multiplier = 1.25,
+    @HoursPerMonth = 40;
+
+    SELECT TOP 1 * 
+FROM PayrollPolicy 
+WHERE type = 'Overtime'
+ORDER BY policy_id DESC;
+
+SELECT TOP 1 *
+FROM OvertimePolicy
+ORDER BY policy_id DESC;
+
+
+
+SELECT * FROM PayrollPolicy WHERE type = 'Shift Allowance';
+SELECT * FROM Payroll_Log WHERE modification_type LIKE '%Shift Allowance%';
+
+EXEC ConfigureShiftAllowance
+    @ShiftType = 'Night',
+    @AllowanceAmount = 300,
+    @CreatedBy = 1;
+
+    SELECT TOP 1 *
+FROM PayrollPolicy
+WHERE type = 'Shift Allowance'
+ORDER BY policy_id DESC;
+
+SELECT TOP 1 *
+FROM Payroll_Log
+WHERE modification_type LIKE '%Shift Allowance%'
+ORDER BY payroll_log_id DESC;
+
+
+
+SELECT * FROM PayrollPolicy WHERE type = 'Signing Bonus';
+SELECT * FROM BonusPolicy;
+
+EXEC ConfigureSigningBonusPolicy
+    @BonusType = 'Joining Bonus',
+    @Amount = 2000,
+    @EligibilityCriteria = N'New hires with full-time contracts';
+
+    SELECT TOP 1 *
+FROM PayrollPolicy
+WHERE type = 'Signing Bonus'
+ORDER BY policy_id DESC;
+
+SELECT TOP 1 *
+FROM BonusPolicy
+ORDER BY policy_id DESC;
+
+SELECT TOP 1 *
+FROM Payroll_Log
+WHERE modification_type LIKE '%Signing Bonus%'
+ORDER BY payroll_log_id DESC;
+
+
+EXEC GenerateTaxStatement
+    @EmployeeID = 1,
+    @TaxYear = 2024;
+
+   
+
+------------------------------------------------------------
+-- STEP 1 — Show current workflows (so we know what exists)
+------------------------------------------------------------
+SELECT workflow_id, workflow_type, status, approver_role, created_by
+FROM ApprovalWorkflow;
+
+
+------------------------------------------------------------
+-- STEP 2 — Create a NEW Payroll Config workflow 
+-- (Only if it doesn't exist already)
+------------------------------------------------------------
+EXEC ApprovePayrollConfigChanges
+     @ConfigID = 999,     -- Non-existent ID triggers creation
+     @ApproverID = 1,
+     @Status = 'Pending';
+
+
+------------------------------------------------------------
+-- STEP 3 — Get the NEW Payroll Config workflow ID
+------------------------------------------------------------
+SELECT workflow_id, workflow_type, status
+FROM ApprovalWorkflow
+WHERE workflow_type = 'Payroll Config';
+
+
+------------------------------------------------------------
+-- IMPORTANT:
+-- COPY the workflow_id from the output above
+-- and paste it as @ConfigID in Step 4.
+------------------------------------------------------------
+
+
+------------------------------------------------------------
+-- STEP 4 — Approve the Payroll Config workflow
+-- (Replace X with the workflow_id returned in Step 3)
+------------------------------------------------------------
+EXEC ApprovePayrollConfiguration
+    @ConfigID = 3,        -- Replace X with actual workflow_id
+    @ApprovedBy = 1;
+
+
+------------------------------------------------------------
+-- STEP 5 — Verify the approval
+------------------------------------------------------------
+SELECT workflow_id, workflow_type, status
+FROM ApprovalWorkflow
+WHERE workflow_id = 3;    -- same X as above
+
+
+------------------------------------------------------------
+-- STEP 6 — Check that a log entry was created
+------------------------------------------------------------
+SELECT TOP 1 *
+FROM Payroll_Log
+WHERE modification_type LIKE '%ConfigID%'
+ORDER BY payroll_log_id DESC;
+
+ 
+ SELECT payroll_id, employee_id, base_amount, taxes, adjustments, contributions, actual_pay, net_salary
+FROM Payroll
+WHERE payroll_id = 1;
+
+EXEC ModifyPastPayroll
+    @PayrollRunID = 1,
+    @EmployeeID = 1,
+    @FieldName = 'base_amount',
+    @NewValue = 16000,
+    @ModifiedBy = 1;
+
+    SELECT payroll_id, employee_id, base_amount, taxes, adjustments, contributions, actual_pay, net_salary
+FROM Payroll
+WHERE payroll_id = 1;
+
+SELECT TOP 1 *
+FROM Payroll_Log
+ORDER BY payroll_log_id DESC;
+
+*/
